@@ -1,0 +1,138 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import type { ReactNode } from "react";
+
+function HomeIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={active ? 2.2 : 1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 11.5 12 4l8 7.5" />
+      <path d="M6 10.5V20h12v-9.5" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={active ? 2.2 : 1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="5.5" width="16" height="15" rx="2" />
+      <path d="M4 10h16M8 3.5v3M16 3.5v3" />
+    </svg>
+  );
+}
+
+function GridIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={active ? 2.2 : 1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="4" width="7" height="7" rx="1.2" />
+      <rect x="13" y="4" width="7" height="7" rx="1.2" />
+      <rect x="4" y="13" width="7" height="7" rx="1.2" />
+      <rect x="13" y="13" width="7" height="7" rx="1.2" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function NavLink({
+  href,
+  label,
+  active,
+  children,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className={
+        "flex w-16 flex-col items-center gap-1 py-2 text-[11px] " +
+        (active ? "text-neutral-900" : "text-neutral-400")
+      }
+    >
+      {children}
+      <span>{label}</span>
+    </Link>
+  );
+}
+
+export default function BottomNav() {
+  const pathname = usePathname();
+  const isLooks = pathname === "/looks" || pathname?.startsWith("/looks/");
+
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-20 border-t border-neutral-100 bg-white/95 backdrop-blur"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      <div className="relative mx-auto flex max-w-2xl items-center justify-between px-8">
+        <NavLink href="/" label="홈" active={pathname === "/"}>
+          <HomeIcon active={pathname === "/"} />
+        </NavLink>
+        <NavLink href="/history" label="히스토리" active={pathname === "/history"}>
+          <CalendarIcon active={pathname === "/history"} />
+        </NavLink>
+
+        {/* + 버튼 자리 확보용 빈 공간 (버튼 자체는 아래 absolute로 중앙 배치) */}
+        <div className="w-16" />
+
+        <NavLink href="/looks" label="전체 룩" active={isLooks}>
+          <GridIcon active={isLooks} />
+        </NavLink>
+
+        <Link
+          href="/add"
+          aria-label="룩 추가"
+          className="absolute left-1/2 top-0 flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-neutral-900 text-white shadow-lg active:bg-neutral-700"
+        >
+          <PlusIcon />
+        </Link>
+      </div>
+    </nav>
+  );
+}

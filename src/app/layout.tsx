@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import AppShell from "@/components/AppShell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LOOKIE · 사진 메타데이터 검증",
-  description: "거울셀카의 촬영 날짜/GPS 메타데이터 추출 기술 검증 페이지",
+  title: "룩기 LOOKIE",
+  description: "사진첩 속 거울셀카를 자동으로 정리하는 개인 룩 아카이브",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -23,7 +24,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-white">{children}</body>
+      <body className="min-h-full flex flex-col bg-white">
+        <AppShell>{children}</AppShell>
+      </body>
     </html>
   );
 }
