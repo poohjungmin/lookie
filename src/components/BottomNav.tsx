@@ -60,15 +60,15 @@ function GridIcon({ active }: { active: boolean }) {
   );
 }
 
-function PlusIcon() {
+function PlusIcon({ active }: { active: boolean }) {
   return (
     <svg
-      width="24"
-      height="24"
+      width="22"
+      height="22"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={active ? 2.2 : 1.6}
       strokeLinecap="round"
     >
       <path d="M12 5v14M5 12h14" />
@@ -104,34 +104,26 @@ function NavLink({
 export default function BottomNav() {
   const pathname = usePathname();
   const isLooks = pathname === "/looks" || pathname?.startsWith("/looks/");
+  const isAdd = pathname === "/add";
 
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-20 border-t border-neutral-100 bg-white/95 backdrop-blur"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <div className="relative mx-auto flex max-w-2xl items-center justify-between px-8">
+      <div className="mx-auto flex max-w-2xl items-center justify-around">
         <NavLink href="/" label="홈" active={pathname === "/"}>
           <HomeIcon active={pathname === "/"} />
         </NavLink>
         <NavLink href="/history" label="히스토리" active={pathname === "/history"}>
           <CalendarIcon active={pathname === "/history"} />
         </NavLink>
-
-        {/* + 버튼 자리 확보용 빈 공간 (버튼 자체는 아래 absolute로 중앙 배치) */}
-        <div className="w-16" />
-
+        <NavLink href="/add" label="추가" active={isAdd}>
+          <PlusIcon active={isAdd} />
+        </NavLink>
         <NavLink href="/looks" label="전체 룩" active={isLooks}>
           <GridIcon active={isLooks} />
         </NavLink>
-
-        <Link
-          href="/add"
-          aria-label="룩 추가"
-          className="absolute left-1/2 top-0 flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-neutral-900 text-white shadow-lg active:bg-neutral-700"
-        >
-          <PlusIcon />
-        </Link>
       </div>
     </nav>
   );
