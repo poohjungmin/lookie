@@ -120,16 +120,35 @@ export default function Home() {
   // iOS Safari는 팝업 기반 로그인이 자주 막히므로 signInWithRedirect를 쓰고,
   // 페이지가 다시 로드된 시점에 getRedirectResult로 결과를 받는다.
   useEffect(() => {
-    getRedirectResult(auth).catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      setAuthError(`Google 로그인 실패: ${message}`);
-      addLog(`로그인 리다이렉트 처리 실패: ${message}`);
-    });
+    /* eslint-disable react-hooks/set-state-in-effect -- 리다이렉트 로그인 진단을
+       위한 의도적인 로그 기록 (콘솔 접근이 어려운 환경에서 화면으로 확인) */
+    addLog(`getRedirectResult 확인 시작 (url=${window.location.href})`);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result?.user) {
+          addLog(`getRedirectResult 성공: uid=${result.user.uid}`);
+        } else {
+          // result가 null이면 "리다이렉트 후 돌아온 상태가 아님" 또는
+          // "브라우저 저장소 정책 때문에 결과를 못 읽음" 둘 다 해당할 수 있다.
+          addLog("getRedirectResult: 결과 없음 (result가 null)");
+        }
+      })
+      .catch((err) => {
+        const code = (err as { code?: string })?.code ?? "unknown";
+        const message = err instanceof Error ? err.message : String(err);
+        setAuthError(`Google 로그인 실패 (${code}): ${message}`);
+        addLog(`getRedirectResult 실패: [${code}] ${message}`);
+      });
 
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
-      addLog(u ? `로그인 상태 감지 (uid=${u.uid})` : "로그아웃 상태");
+      addLog(
+        u
+          ? `onAuthStateChanged: 로그인 (uid=${u.uid})`
+          : "onAuthStateChanged: 로그아웃/미로그인 상태"
+      );
     });
     return unsubscribe;
   }, []);
@@ -487,6 +506,21 @@ export default function Home() {
         </button>
         {authError && (
           <p className="mt-4 max-w-xs text-xs text-red-600">{authError}</p>
+        )}
+
+        {/* DEVELOPMENT ONLY — 로그인이 콘솔 없이 디버깅하기 어려운 리다이렉트
+            흐름이라, 로그인 전 화면에도 최근 로그를 보여준다. */}
+        {debugLog.length > 0 && (
+          <details className="mt-6 w-full max-w-xs text-left">
+            <summary className="cursor-pointer text-xs text-neutral-400">
+              로그인 디버그 로그 ({debugLog.length})
+            </summary>
+            <div className="mt-2 max-h-40 overflow-y-auto rounded-lg bg-neutral-900 p-2 font-mono text-[10px] leading-relaxed text-neutral-100">
+              {debugLog.map((line, i) => (
+                <p key={i}>{line}</p>
+              ))}
+            </div>
+          </details>
         )}
       </div>
     );
