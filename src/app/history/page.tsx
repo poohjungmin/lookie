@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useApp } from "@/lib/AppContext";
-import type { SavedLook } from "@/lib/lookStore";
+import type { DisplayLook } from "@/lib/useLocalFirstLooks";
 
 const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -24,7 +24,7 @@ function buildMonthGrid(year: number, month: number): (Date | null)[] {
 }
 
 export default function HistoryPage() {
-  const { looks, looksLoading } = useApp();
+  const { looks, syncing } = useApp();
   const today = new Date();
 
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -32,7 +32,7 @@ export default function HistoryPage() {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const looksByDay = useMemo(() => {
-    const map = new Map<string, SavedLook[]>();
+    const map = new Map<string, DisplayLook[]>();
     for (const look of looks) {
       if (!look.takenAt) continue;
       const key = dateKey(look.takenAt.toDate());
@@ -130,7 +130,7 @@ export default function HistoryPage() {
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={dayLooks[0].imageUrl}
+                    src={dayLooks[0].thumbSrc}
                     alt=""
                     className="h-full w-full object-cover"
                   />
@@ -171,7 +171,7 @@ export default function HistoryPage() {
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={look.imageUrl}
+                    src={look.thumbSrc}
                     alt=""
                     className="h-full w-full object-cover"
                   />
@@ -182,7 +182,7 @@ export default function HistoryPage() {
         </section>
       )}
 
-      {looksLoading && (
+      {syncing && (
         <p className="mt-6 text-center text-xs text-neutral-400">
           불러오는 중…
         </p>

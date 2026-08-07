@@ -7,7 +7,7 @@ import { formatDateOnly } from "@/lib/format";
 export default function LookDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { looks, looksLoading } = useApp();
+  const { looks, syncing } = useApp();
 
   const look = looks.find((l) => l.id === id);
 
@@ -15,7 +15,7 @@ export default function LookDetailPage() {
     return (
       <div className="mx-auto max-w-2xl px-5 pt-16 text-center sm:px-6">
         <p className="text-sm text-neutral-400">
-          {looksLoading ? "불러오는 중…" : "룩을 찾을 수 없습니다"}
+          {syncing ? "불러오는 중…" : "룩을 찾을 수 없습니다"}
         </p>
         <button
           type="button"

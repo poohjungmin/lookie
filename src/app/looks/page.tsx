@@ -5,7 +5,7 @@ import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
 
 export default function LooksPage() {
-  const { looks, looksLoading } = useApp();
+  const { looks, syncing } = useApp();
 
   return (
     <div className="mx-auto max-w-2xl px-5 pb-10 pt-10 sm:px-6">
@@ -18,13 +18,13 @@ export default function LooksPage() {
         </h1>
       </header>
 
-      {looksLoading && looks.length === 0 && (
+      {syncing && looks.length === 0 && (
         <p className="mt-10 text-center text-xs text-neutral-400">
           불러오는 중…
         </p>
       )}
 
-      {!looksLoading && looks.length === 0 && (
+      {!syncing && looks.length === 0 && (
         <p className="mt-10 text-center text-xs text-neutral-300">
           아직 저장된 룩이 없습니다
         </p>
@@ -39,7 +39,7 @@ export default function LooksPage() {
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={look.imageUrl}
+              src={look.thumbSrc}
               alt=""
               className="h-full w-full object-cover"
             />

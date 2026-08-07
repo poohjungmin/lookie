@@ -28,6 +28,13 @@ export type DbWeather = {
 export type LookRecord = {
   imageUrl: string;
   storagePath: string;
+  /**
+   * 목록/캘린더/홈용 400px WebP 썸네일. 이 필드가 추가되기 전에 저장된
+   * 기존 룩에는 없을 수 있으므로(null) - UI에서는 항상
+   * `thumbnailUrl ?? imageUrl` 형태로 폴백해서 써야 한다.
+   */
+  thumbnailUrl: string | null;
+  thumbnailStoragePath: string | null;
   originalFileName: string;
 
   takenAt: Timestamp | null;
@@ -42,7 +49,12 @@ export type LookRecord = {
   aiAnalysis: null;
 
   fingerprint: string;
-  createdAt: ReturnType<typeof serverTimestamp>;
+  // Firestore에 쓸 때는 serverTimestamp() sentinel(FieldValue)이 들어가지만,
+  // 읽어올 때는 실제 Timestamp 인스턴스로 돌아온다. 이 타입은 "읽은 후" 모양
+  // 기준이다 - 쓰기 쪽은 saveLookRecord에서 별도로 FieldValue를 채운다.
+  createdAt: Timestamp | null;
+  /** 로컬 캐시 동기화 판단용. 문서가 새로 생기거나 갱신될 때마다 서버 시간으로 다시 찍힌다. */
+  updatedAt: Timestamp | null;
 };
 
 /**
@@ -89,21 +101,63 @@ export async function uploadLookPhoto(
   return { imageUrl, storagePath };
 }
 
+export async function uploadLookThumbnail(
+  uid: string,
+  lookId: string,
+  blob: Blob
+): Promise<{ thumbnailUrl: string; thumbnailStoragePath: string }> {
+  const storagePath = `users/${uid}/looks/${lookId}/thumbnail`;
+  const storageRef = ref(storage, storagePath);
+  await uploadBytes(storageRef, blob, { contentType: blob.type || "image/webp" });
+  const thumbnailUrl = await getDownloadURL(storageRef);
+  return { thumbnailUrl, thumbnailStoragePath: storagePath };
+}
+
 export async function saveLookRecord(
   uid: string,
   lookId: string,
-  data: Omit<LookRecord, "createdAt">
+  data: Omit<LookRecord, "createdAt" | "updatedAt">
 ): Promise<void> {
   await setDoc(lookDocRef(uid, lookId), {
     ...data,
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 }
 
 export type SavedLook = LookRecord & { id: string };
 
+/**
+ * Firestore에서 원시 문서를 읽어 SavedLook으로 정규화한다.
+ * thumbnailUrl/updatedAt처럼 나중에 추가된 필드는 예전 문서에 아예 없을 수
+ * 있으므로(undefined), 항상 안전한 기본값으로 채운다 - 이게 마이그레이션
+ * 친화적 스키마의 핵심이다: 예전 문서를 고쳐 쓰지 않고도 새 코드가 그대로 읽는다.
+ */
+function normalizeLookDoc(id: string, raw: Partial<LookRecord>): SavedLook {
+  return {
+    id,
+    imageUrl: raw.imageUrl ?? "",
+    storagePath: raw.storagePath ?? "",
+    thumbnailUrl: raw.thumbnailUrl ?? null,
+    thumbnailStoragePath: raw.thumbnailStoragePath ?? null,
+    originalFileName: raw.originalFileName ?? "",
+    takenAt: raw.takenAt ?? null,
+    latitude: raw.latitude ?? null,
+    longitude: raw.longitude ?? null,
+    weather: raw.weather ?? null,
+    weatherStatus: raw.weatherStatus ?? "missing_metadata",
+    category: null,
+    dressLevel: null,
+    aiAnalysis: null,
+    fingerprint: raw.fingerprint ?? id,
+    createdAt: (raw.createdAt ?? null) as SavedLook["createdAt"],
+    // updatedAt이 없는 예전 문서는 createdAt을 기준 시각으로 대신 쓴다.
+    updatedAt: (raw.updatedAt ?? raw.createdAt ?? null) as SavedLook["updatedAt"],
+  };
+}
+
 export async function fetchUserLooks(uid: string): Promise<SavedLook[]> {
   const q = query(collection(db, "users", uid, "looks"), orderBy("takenAt", "desc"));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as LookRecord) }));
+  return snap.docs.map((d) => normalizeLookDoc(d.id, d.data() as Partial<LookRecord>));
 }

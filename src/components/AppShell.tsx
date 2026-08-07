@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -9,7 +9,7 @@ import {
   type User,
 } from "firebase/auth";
 import { auth, googleProvider } from "@/lib/firebaseClient";
-import { fetchUserLooks, type SavedLook } from "@/lib/lookStore";
+import { useLocalFirstLooks } from "@/lib/useLocalFirstLooks";
 import { AppContext } from "@/lib/AppContext";
 import BottomNav from "@/components/BottomNav";
 import LoginScreen from "@/components/LoginScreen";
@@ -22,10 +22,9 @@ function timestamp(): string {
 }
 
 /**
- * 로그인 게이트 + 전역 상태(로그인 유저, 저장된 룩 목록) 제공.
+ * 로그인 게이트 + 전역 상태(로그인 유저, 로컬 캐시 우선으로 불러오는 룩 목록) 제공.
  * 로그인 전에는 LoginScreen만, 로그인 후에는 하단 내비게이션과 함께
- * 페이지 콘텐츠를 렌더링한다. STEP 1~3의 인증/조회 로직을 그대로 옮긴 것이며
- * 동작 자체는 바뀌지 않았다.
+ * 페이지 콘텐츠를 렌더링한다.
  */
 export default function AppShell({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -33,13 +32,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const [devLog, setDevLog] = useState<string[]>([]);
 
-  const [looks, setLooks] = useState<SavedLook[]>([]);
-  const [looksLoading, setLooksLoading] = useState(false);
-
-  function log(message: string) {
+  const log = useCallback((message: string) => {
     if (!isDev) return;
     setDevLog((prev) => [...prev.slice(-49), `${timestamp()}  ${message}`]);
-  }
+  }, []);
+
+  const { looks, syncing, offline, refresh } = useLocalFirstLooks(
+    user ? user.uid : null,
+    log
+  );
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -48,35 +49,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
       log(u ? `로그인 상태 (uid=${u.uid})` : "로그아웃 상태");
     });
     return unsubscribe;
-  }, []);
-
-  async function refreshLooks() {
-    if (!user) {
-      setLooks([]);
-      return;
-    }
-    setLooksLoading(true);
-    try {
-      const data = await fetchUserLooks(user.uid);
-      setLooks(data);
-    } catch (err) {
-      log(`저장된 룩 조회 실패: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setLooksLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect -- 로그인 상태가 바뀔 때
-       저장된 룩 목록을 동기화하는 의도적인 데이터 페칭 패턴 */
-    if (user) {
-      refreshLooks();
-    } else {
-      setLooks([]);
-    }
-    /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, []);
 
   // 팝업 방식을 우선 사용한다 (redirect 방식은 최신 Chrome의 서드파티 저장소
   // 분리 정책 때문에 로그인 후 첫 화면으로 되돌아가는 문제가 실측 확인됨).
@@ -133,8 +107,24 @@ export default function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AppContext.Provider value={{ user, looks, looksLoading, refreshLooks, signOutUser }}>
-      <div className="min-h-dvh bg-white pb-24">{children}</div>
+    <AppContext.Provider
+      value={{ user, looks, syncing, offline, refreshLooks: refresh, signOutUser }}
+    >
+      <div className="min-h-dvh bg-white pb-24">
+        {/* 캐시된 데이터는 보여주되, 방금 동기화가 실패했다면(오프라인 등) 알려준다 */}
+        {offline && (
+          <div className="bg-amber-50 px-4 py-1.5 text-center text-[11px] text-amber-700">
+            오프라인 상태예요 - 마지막으로 저장된 룩을 보여드리고 있어요
+          </div>
+        )}
+        {children}
+      </div>
+      {/* DEVELOPMENT ONLY - 로컬 캐시/동기화 상태를 콘솔 없이 확인하기 위한 표시 */}
+      {isDev && (
+        <div className="fixed right-2 top-2 z-30 rounded-lg bg-neutral-900/90 px-2 py-1 text-[10px] text-white">
+          {syncing ? "동기화 중…" : offline ? "오프라인" : `동기화됨 · ${looks.length}개`}
+        </div>
+      )}
       <BottomNav />
     </AppContext.Provider>
   );

@@ -13,7 +13,7 @@ function todayKorean(): string {
 }
 
 export default function HomePage() {
-  const { looks, looksLoading, signOutUser } = useApp();
+  const { looks, syncing, signOutUser } = useApp();
 
   // 아직 "비슷한 날씨" 추천 로직이 없으므로, 최근 저장한 룩을 자리표시자로 보여준다.
   const placeholderPicks = looks.slice(0, 4);
@@ -52,13 +52,13 @@ export default function HomePage() {
           추천 기능은 준비 중이에요. 최근 저장한 룩을 먼저 보여드려요.
         </p>
 
-        {looksLoading && placeholderPicks.length === 0 && (
+        {syncing && placeholderPicks.length === 0 && (
           <p className="mt-8 text-center text-xs text-neutral-400">
             불러오는 중…
           </p>
         )}
 
-        {!looksLoading && placeholderPicks.length === 0 && (
+        {!syncing && placeholderPicks.length === 0 && (
           <p className="mt-8 text-center text-xs text-neutral-300">
             아직 저장된 룩이 없어요. + 버튼으로 첫 룩을 추가해보세요.
           </p>
@@ -75,7 +75,7 @@ export default function HomePage() {
                 <div className="aspect-[3/4]">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={look.imageUrl}
+                    src={look.thumbSrc}
                     alt=""
                     className="h-full w-full object-cover"
                   />

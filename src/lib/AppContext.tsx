@@ -2,12 +2,15 @@
 
 import { createContext, useContext } from "react";
 import type { User } from "firebase/auth";
-import type { SavedLook } from "@/lib/lookStore";
+import type { DisplayLook } from "@/lib/useLocalFirstLooks";
 
 export type AppContextValue = {
   user: User;
-  looks: SavedLook[];
-  looksLoading: boolean;
+  looks: DisplayLook[];
+  /** 백그라운드 Firestore 동기화 진행 중 여부 (초기 화면을 막지 않음) */
+  syncing: boolean;
+  /** 마지막 동기화가 실패했는지 (오프라인 등) - 캐시된 데이터는 계속 보여준다 */
+  offline: boolean;
   refreshLooks: () => Promise<void>;
   signOutUser: () => void;
 };

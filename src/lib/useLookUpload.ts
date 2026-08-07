@@ -8,9 +8,13 @@ import {
   computeFingerprint,
   lookAlreadyExists,
   uploadLookPhoto,
+  uploadLookThumbnail,
   saveLookRecord,
+  type DbWeather,
   type DbWeatherStatus,
 } from "@/lib/lookStore";
+import { generateThumbnail } from "@/lib/thumbnail";
+import { cacheKeyOf, putCachedLook } from "@/lib/lookCache";
 
 type WeatherStage = "no-date" | "no-gps" | "done" | "error";
 export type SaveStage =
@@ -38,6 +42,10 @@ function toDbWeatherStatus(stage: WeatherStage): DbWeatherStatus {
  * STEP 1~3에서 만든 업로드 파이프라인(메타데이터 추출 → 날씨 조회 →
  * Storage 업로드 → Firestore 기록, 파일별 독립 처리 + 중복 방지)을
  * 그대로 재사용하는 훅. UI(진행 상태 표시)만 화면마다 다르게 그린다.
+ *
+ * local-first 캐시 개선: 원본과 별도로 목록용 WebP 썸네일을 생성/업로드하고,
+ * 저장이 끝나자마자 이미 메모리에 있는 썸네일 Blob을 바로 IndexedDB에 써서
+ * 다음 동기화 때 다시 내려받지 않게 한다.
  */
 export function useLookUpload(uid: string, onSaved: () => void) {
   const [items, setItems] = useState<UploadItem[]>([]);
@@ -81,32 +89,73 @@ export function useLookUpload(uid: string, onSaved: () => void) {
       }
 
       updateItem(item.id, { saveStage: "uploading-photo" });
-      const { imageUrl, storagePath } = await uploadLookPhoto(uid, fingerprint, item.file);
+      // 원본 업로드와 썸네일 생성은 서로 무관하니 동시에 진행한다.
+      // 썸네일 생성이 실패해도(구형 브라우저 등) 원본 저장은 그대로 진행된다.
+      const [{ imageUrl, storagePath }, thumbBlob] = await Promise.all([
+        uploadLookPhoto(uid, fingerprint, item.file),
+        generateThumbnail(item.file),
+      ]);
+
+      let thumbnailUrl: string | null = null;
+      let thumbnailStoragePath: string | null = null;
+      if (thumbBlob) {
+        try {
+          const result = await uploadLookThumbnail(uid, fingerprint, thumbBlob);
+          thumbnailUrl = result.thumbnailUrl;
+          thumbnailStoragePath = result.thumbnailStoragePath;
+        } catch {
+          // 썸네일 업로드 실패 - 원본은 이미 있으니 imageUrl로 폴백하며 계속 진행
+        }
+      }
+
+      const weatherPayload: DbWeather | null = weather
+        ? {
+            weatherCode: weather.weatherCode,
+            weatherLabel: weather.weatherLabel,
+            tempMax: weather.maxTemp,
+            tempMin: weather.minTemp,
+            tempMean: weather.meanTemp,
+            precipitation: weather.precipitationSum,
+            windMax: weather.maxWindSpeed,
+          }
+        : null;
+      const weatherStatus = toDbWeatherStatus(weatherStage);
 
       updateItem(item.id, { saveStage: "saving-record" });
       await saveLookRecord(uid, fingerprint, {
         imageUrl,
         storagePath,
+        thumbnailUrl,
+        thumbnailStoragePath,
         originalFileName: item.file.name,
         takenAt: meta.dateTimeOriginal ? Timestamp.fromDate(meta.dateTimeOriginal) : null,
         latitude: meta.latitude,
         longitude: meta.longitude,
-        weather: weather
-          ? {
-              weatherCode: weather.weatherCode,
-              weatherLabel: weather.weatherLabel,
-              tempMax: weather.maxTemp,
-              tempMin: weather.minTemp,
-              tempMean: weather.meanTemp,
-              precipitation: weather.precipitationSum,
-              windMax: weather.maxWindSpeed,
-            }
-          : null,
-        weatherStatus: toDbWeatherStatus(weatherStage),
+        weather: weatherPayload,
+        weatherStatus,
         category: null,
         dressLevel: null,
         aiAnalysis: null,
         fingerprint,
+      });
+
+      // 이미 메모리에 썸네일 Blob이 있으니, 다음 동기화 때 다시 내려받지 않도록
+      // 지금 바로 로컬 캐시에 반영한다.
+      await putCachedLook({
+        cacheKey: cacheKeyOf(uid, fingerprint),
+        uid,
+        lookId: fingerprint,
+        imageUrl,
+        thumbnailUrl,
+        takenAtMs: meta.dateTimeOriginal ? meta.dateTimeOriginal.getTime() : null,
+        latitude: meta.latitude,
+        longitude: meta.longitude,
+        weatherStatus,
+        weather: weatherPayload,
+        updatedAtMs: Date.now(),
+        thumbBlob,
+        thumbType: thumbBlob?.type ?? null,
+        cachedAt: Date.now(),
       });
 
       updateItem(item.id, { saveStage: "saved" });
