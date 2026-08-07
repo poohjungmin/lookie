@@ -1,10 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  onAuthStateChanged,
+  getRedirectResult,
+  signInWithRedirect,
+  signOut,
+  type User,
+} from "firebase/auth";
 import { extractPhotoMetadataSafe } from "@/lib/exif";
 import { fetchHistoricalWeather, type WeatherResult } from "@/lib/weather";
+import { auth, googleProvider } from "@/lib/firebaseClient";
+import {
+  computeFingerprint,
+  lookAlreadyExists,
+  uploadLookPhoto,
+  saveLookRecord,
+  fetchUserLooks,
+  type SavedLook,
+  type DbWeatherStatus,
+} from "@/lib/lookStore";
+import { Timestamp } from "firebase/firestore";
 
 type WeatherStatus = "idle" | "loading" | "done" | "no-date" | "no-gps" | "error";
+type SaveStatus =
+  | "idle"
+  | "uploading-photo"
+  | "saving-record"
+  | "saved"
+  | "duplicate"
+  | "error";
 
 type Photo = {
   id: string;
@@ -23,7 +48,16 @@ type Photo = {
   weather: WeatherResult | null;
   /** 날씨를 못 가져온 이유를 사람이 읽을 수 있는 문장으로 */
   weatherMessage: string | null;
+  saveStatus: SaveStatus;
+  saveMessage: string | null;
 };
+
+/** UI의 세분화된 날씨 상태를 Firestore에 저장할 3가지 상태로 단순화 */
+function toDbWeatherStatus(status: WeatherStatus): DbWeatherStatus {
+  if (status === "done") return "success";
+  if (status === "error") return "failed";
+  return "missing_metadata"; // no-date, no-gps, idle, loading(도달 안 함)
+}
 
 function formatDate(date: Date | null): string {
   if (!date) return "메타데이터 없음";
@@ -69,13 +103,151 @@ export default function Home() {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [lastSelectionCount, setLastSelectionCount] = useState(0);
 
+  // 인증 상태. authLoading이 끝나기 전까지는 로그인 여부를 알 수 없으므로
+  // 잠깐이라도 잘못된 화면(로그인 전 화면)이 깜빡이지 않도록 별도로 관리한다.
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const [savedLooks, setSavedLooks] = useState<SavedLook[]>([]);
+  const [savedLooksLoading, setSavedLooksLoading] = useState(false);
+
   function addLog(message: string) {
     setDebugLog((prev) => [...prev.slice(-49), `${timestamp()}  ${message}`]);
+  }
+
+  // 로그인 상태 구독 + 리다이렉트 로그인 완료 처리.
+  // iOS Safari는 팝업 기반 로그인이 자주 막히므로 signInWithRedirect를 쓰고,
+  // 페이지가 다시 로드된 시점에 getRedirectResult로 결과를 받는다.
+  useEffect(() => {
+    getRedirectResult(auth).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      setAuthError(`Google 로그인 실패: ${message}`);
+      addLog(`로그인 리다이렉트 처리 실패: ${message}`);
+    });
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+      addLog(u ? `로그인 상태 감지 (uid=${u.uid})` : "로그아웃 상태");
+    });
+    return unsubscribe;
+  }, []);
+
+  // uid가 바뀔 때(로그인/로그아웃/계정 전환)마다 저장된 룩을 다시 불러온다.
+  // effect 본문에서 setState를 직접 동기 호출하지 않도록 실제 조회는
+  // 별도 함수(refreshSavedLooks)의 첫 await 이후로 넘긴다.
+  async function refreshSavedLooks(uid: string) {
+    setSavedLooksLoading(true);
+    try {
+      const looks = await fetchUserLooks(uid);
+      setSavedLooks(looks);
+      addLog(`저장된 룩 ${looks.length}개 조회 완료`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      addLog(`저장된 룩 조회 실패: ${message}`);
+    } finally {
+      setSavedLooksLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- 로그인/로그아웃 시
+       저장된 룩 목록을 동기화하기 위한 의도적인 데이터 페칭 패턴 */
+    if (user) {
+      refreshSavedLooks(user.uid);
+    } else {
+      setSavedLooks([]);
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  function handleGoogleSignIn() {
+    setAuthError(null);
+    signInWithRedirect(auth, googleProvider).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      setAuthError(`Google 로그인 시작 실패: ${message}`);
+    });
+  }
+
+  function handleSignOut() {
+    signOut(auth).catch((err) => {
+      addLog(`로그아웃 실패: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  function updatePhoto(id: string, patch: Partial<Photo>) {
+    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  }
+
+  // 사진 저장(Storage 업로드 + Firestore 기록)은 메타데이터/날씨 처리가 끝난 뒤
+  // 마지막 단계로 실행된다. 여기서 어떤 에러가 나도 다른 사진 처리를 막지 않도록
+  // 함수 내부에서 전부 처리하고 절대 throw하지 않는다.
+  async function saveLookForPhoto(
+    uid: string,
+    photo: Photo,
+    date: Date | null,
+    lat: number | null,
+    lon: number | null,
+    weather: WeatherResult | null,
+    weatherStatus: WeatherStatus
+  ) {
+    try {
+      const fingerprint = await computeFingerprint(photo.file, date);
+
+      const exists = await lookAlreadyExists(uid, fingerprint);
+      if (exists) {
+        addLog(`[${photo.file.name}] 이미 등록된 사진 (fingerprint 일치)`);
+        updatePhoto(photo.id, { saveStatus: "duplicate", saveMessage: "이미 등록된 사진" });
+        return;
+      }
+
+      updatePhoto(photo.id, { saveStatus: "uploading-photo" });
+      addLog(`[${photo.file.name}] Storage 업로드 시작`);
+      const { imageUrl, storagePath } = await uploadLookPhoto(uid, fingerprint, photo.file);
+
+      updatePhoto(photo.id, { saveStatus: "saving-record" });
+      addLog(`[${photo.file.name}] Firestore 기록 저장 시작`);
+      await saveLookRecord(uid, fingerprint, {
+        imageUrl,
+        storagePath,
+        originalFileName: photo.file.name,
+        takenAt: date ? Timestamp.fromDate(date) : null,
+        latitude: lat,
+        longitude: lon,
+        weather: weather
+          ? {
+              weatherCode: weather.weatherCode,
+              weatherLabel: weather.weatherLabel,
+              tempMax: weather.maxTemp,
+              tempMin: weather.minTemp,
+              tempMean: weather.meanTemp,
+              precipitation: weather.precipitationSum,
+              windMax: weather.maxWindSpeed,
+            }
+          : null,
+        weatherStatus: toDbWeatherStatus(weatherStatus),
+        category: null,
+        dressLevel: null,
+        aiAnalysis: null,
+        fingerprint,
+      });
+
+      addLog(`[${photo.file.name}] 저장 완료`);
+      updatePhoto(photo.id, { saveStatus: "saved", saveMessage: null });
+      refreshSavedLooks(uid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      addLog(`[${photo.file.name}] 저장 실패: ${message}`);
+      updatePhoto(photo.id, { saveStatus: "error", saveMessage: "저장 실패" });
+    }
   }
 
   // 날씨 조회는 메타데이터 처리와 별도의 단계다.
   // GPS/날짜가 없으면 API를 호출하지 않고 바로 이유를 표시하고,
   // API 호출이 실패해도 사진 자체(미리보기·메타데이터)는 그대로 남는다.
+  // 저장 단계(saveLookForPhoto)에서 그대로 이어 쓸 수 있도록 최종 상태를 반환한다.
   async function fetchWeatherForPhoto(
     photoId: string,
     fileName: string,
@@ -84,70 +256,42 @@ export default function Home() {
     date: Date | null,
     lat: number | null,
     lon: number | null
-  ) {
+  ): Promise<{ status: WeatherStatus; weather: WeatherResult | null }> {
     if (!hasDate) {
-      setPhotos((prev) =>
-        prev.map((p) =>
-          p.id === photoId
-            ? {
-                ...p,
-                weatherStatus: "no-date",
-                weatherMessage: "촬영 날짜가 없어 날씨를 불러올 수 없음",
-              }
-            : p
-        )
-      );
-      return;
+      updatePhoto(photoId, {
+        weatherStatus: "no-date",
+        weatherMessage: "촬영 날짜가 없어 날씨를 불러올 수 없음",
+      });
+      return { status: "no-date", weather: null };
     }
     if (!hasGps) {
-      setPhotos((prev) =>
-        prev.map((p) =>
-          p.id === photoId
-            ? {
-                ...p,
-                weatherStatus: "no-gps",
-                weatherMessage: "위치 정보가 없어 날씨를 불러올 수 없음",
-              }
-            : p
-        )
-      );
-      return;
+      updatePhoto(photoId, {
+        weatherStatus: "no-gps",
+        weatherMessage: "위치 정보가 없어 날씨를 불러올 수 없음",
+      });
+      return { status: "no-gps", weather: null };
     }
 
-    setPhotos((prev) =>
-      prev.map((p) =>
-        p.id === photoId ? { ...p, weatherStatus: "loading" } : p
-      )
-    );
+    updatePhoto(photoId, { weatherStatus: "loading" });
     addLog(`[${fileName}] 날씨 조회 시작 (${lat}, ${lon})`);
 
     try {
       const weather = await fetchHistoricalWeather(lat as number, lon as number, date as Date);
       addLog(`[${fileName}] 날씨 조회 성공 (${weather.weatherLabel})`);
-      setPhotos((prev) =>
-        prev.map((p) =>
-          p.id === photoId
-            ? { ...p, weatherStatus: "done", weather, weatherMessage: null }
-            : p
-        )
-      );
+      updatePhoto(photoId, { weatherStatus: "done", weather, weatherMessage: null });
+      return { status: "done", weather };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       addLog(`[${fileName}] 날씨 조회 실패: ${message}`);
-      setPhotos((prev) =>
-        prev.map((p) =>
-          p.id === photoId
-            ? { ...p, weatherStatus: "error", weatherMessage: "날씨 조회 실패" }
-            : p
-        )
-      );
+      updatePhoto(photoId, { weatherStatus: "error", weatherMessage: "날씨 조회 실패" });
+      return { status: "error", weather: null };
     }
   }
 
   // 파일 하나에 대한 처리는 완전히 독립적으로 실행된다.
   // 여기서 어떤 예외가 나더라도(이미 extractPhotoMetadataSafe 내부에서 잡지만,
   // 방어적으로 한 번 더 감싼다) 다른 파일 처리에는 영향을 주지 않는다.
-  async function processOnePhoto(photo: Photo) {
+  async function processOnePhoto(photo: Photo, uid: string | null) {
     addLog(`[${photo.file.name}] 메타데이터 추출 시작`);
     try {
       const meta = await extractPhotoMetadataSafe(photo.file);
@@ -182,7 +326,7 @@ export default function Home() {
       // 메타데이터 실패 여부와 무관하게, 날씨 조회는 별도로 시도한다.
       // (한 사진의 날씨 실패가 다른 사진에 영향을 주지 않도록 여기서 await만 하고
       //  예외는 fetchWeatherForPhoto 내부에서 전부 처리된다.)
-      await fetchWeatherForPhoto(
+      const weatherResult = await fetchWeatherForPhoto(
         photo.id,
         photo.file.name,
         meta.hasDate,
@@ -191,6 +335,20 @@ export default function Home() {
         meta.latitude,
         meta.longitude
       );
+
+      // 메타데이터/날씨 처리가 끝난 뒤, 로그인 상태라면 마지막으로 저장을 시도한다.
+      // saveLookForPhoto 내부에서 모든 예외를 처리하므로 여기서 다시 감쌀 필요 없다.
+      if (uid) {
+        await saveLookForPhoto(
+          uid,
+          photo,
+          meta.dateTimeOriginal,
+          meta.latitude,
+          meta.longitude,
+          weatherResult.weather,
+          weatherResult.status
+        );
+      }
     } catch (err) {
       // extractPhotoMetadataSafe는 이론상 절대 throw하지 않지만,
       // 예상치 못한 런타임 오류(iOS 특이 케이스 등)에 대한 마지막 안전망.
@@ -248,6 +406,8 @@ export default function Home() {
         weatherStatus: "idle",
         weather: null,
         weatherMessage: null,
+        saveStatus: "idle",
+        saveMessage: null,
       };
     });
 
@@ -256,7 +416,10 @@ export default function Home() {
 
     // 파일별로 독립적인 프로미스를 "동시에" 시작한다 (순차 await 아님).
     // 하나가 멈추거나 실패해도 나머지는 그대로 진행된다.
-    const results = await Promise.allSettled(initial.map(processOnePhoto));
+    const uid = user ? user.uid : null;
+    const results = await Promise.allSettled(
+      initial.map((photo) => processOnePhoto(photo, uid))
+    );
     const rejected = results.filter((r) => r.status === "rejected").length;
     addLog(
       `배치 처리 종료: 총 ${results.length}장 중 ${rejected}장에서 미처리 예외 발생`
@@ -280,19 +443,77 @@ export default function Home() {
     .filter((p) => p.weatherStatus === "loading")
     .map((p) => p.file.name);
 
+  const savedCount = photos.filter((p) => p.saveStatus === "saved").length;
+  const duplicateCount = photos.filter((p) => p.saveStatus === "duplicate").length;
+  const saveErrorCount = photos.filter((p) => p.saveStatus === "error").length;
+
+  function saveStageLabel(photo: Photo): string | null {
+    if (photo.saveStatus === "uploading-photo") return "사진 저장 중…";
+    if (photo.saveStatus === "saving-record") return "기록 저장 중…";
+    if (photo.saveStatus === "saved") return "저장 완료";
+    if (photo.saveStatus === "duplicate") return "이미 등록됨";
+    if (photo.saveStatus === "error") return "저장 실패";
+    return null;
+  }
+
+  // 로그인 상태를 아직 모르는 동안은 아무 화면도 확정하지 않는다
+  // (로그인 전 화면이 잠깐 보였다가 사라지는 깜빡임 방지).
+  if (authLoading) {
+    return (
+      <div className="flex min-h-full items-center justify-center bg-white">
+        <p className="text-sm text-neutral-400">불러오는 중…</p>
+      </div>
+    );
+  }
+
+  // 로그인 전: 로고 + 한 줄 소개 + Google 로그인 버튼만 보여준다.
+  if (!user) {
+    return (
+      <div className="flex min-h-full flex-col items-center justify-center bg-white px-6 text-center">
+        <p className="text-sm font-medium tracking-wide text-neutral-400">
+          LOOKIE
+        </p>
+        <h1 className="mt-2 text-2xl font-semibold text-neutral-900">룩기</h1>
+        <p className="mt-3 max-w-xs text-sm leading-relaxed text-neutral-500">
+          거울셀카를 자동으로 정리해 그날의 날씨와 함께 보여주는 개인 룩
+          기록장
+        </p>
+        <button
+          type="button"
+          onClick={handleGoogleSignIn}
+          className="mt-8 w-full max-w-xs rounded-2xl bg-neutral-900 py-4 text-sm font-medium text-white active:bg-neutral-700"
+        >
+          Google로 시작하기
+        </button>
+        {authError && (
+          <p className="mt-4 max-w-xs text-xs text-red-600">{authError}</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-full bg-white text-neutral-900">
       <div className="mx-auto max-w-2xl px-4 pb-24 pt-10 sm:px-6">
         <header className="mb-8">
-          <p className="text-xs font-medium tracking-wide text-neutral-400">
-            LOOKIE
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-medium tracking-wide text-neutral-400">
+              LOOKIE
+            </p>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="text-xs text-neutral-400 underline underline-offset-2"
+            >
+              로그아웃 ({user.displayName ?? user.email})
+            </button>
+          </div>
           <h1 className="mt-1 text-xl font-semibold">
             사진 메타데이터 검증
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-neutral-500">
-            거울셀카 여러 장을 선택하면 촬영 날짜와 GPS 정보를 브라우저에서
-            바로 읽어옵니다. 사진은 저장되지 않고 이 기기에서만 처리됩니다.
+            거울셀카 여러 장을 선택하면 촬영 날짜·GPS·그날의 날씨를 자동으로
+            불러와 내 계정에 저장합니다.
           </p>
         </header>
 
@@ -327,6 +548,14 @@ export default function Home() {
             }}
           />
         </label>
+
+        {total > 0 && (
+          <p className="mt-4 text-center text-xs text-neutral-500">
+            {total}장 중 {savedCount}장 저장 완료
+            {duplicateCount > 0 && ` · 중복 ${duplicateCount}장`}
+            {saveErrorCount > 0 && ` · 실패 ${saveErrorCount}장`}
+          </p>
+        )}
 
         {/*
           DEVELOPMENT ONLY — 이 디버그 패널은 iPhone Safari처럼 콘솔에 바로
@@ -373,6 +602,10 @@ export default function Home() {
           <p className="mt-1 text-xs text-neutral-500">
             날씨 조회: 성공 {weatherDoneCount} · 실패 {weatherErrorCount} · 조회 중{" "}
             {weatherLoadingNames.length > 0 ? weatherLoadingNames.join(", ") : "없음"}
+          </p>
+
+          <p className="mt-1 text-xs text-neutral-500">
+            저장: 완료 {savedCount} · 중복 {duplicateCount} · 실패 {saveErrorCount}
           </p>
 
           {errorEntries.length > 0 && (
@@ -538,6 +771,22 @@ export default function Home() {
                         </div>
                       )}
                     </div>
+
+                    {/* 저장 상태 - Storage 업로드 / Firestore 기록 단계 */}
+                    {saveStageLabel(photo) && (
+                      <p
+                        className={
+                          "mt-2 text-xs " +
+                          (photo.saveStatus === "error"
+                            ? "text-red-600"
+                            : photo.saveStatus === "saved"
+                            ? "text-neutral-700"
+                            : "text-neutral-400")
+                        }
+                      >
+                        {saveStageLabel(photo)}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -550,6 +799,45 @@ export default function Home() {
             아직 선택한 사진이 없습니다
           </p>
         )}
+
+        {/* 저장된 룩 히스토리 - 새로고침/재로그인해도 유지되는지 확인하기 위한
+            단순 리스트. 캘린더/추천 UI는 이후 STEP에서 다룬다. */}
+        <section className="mt-10 border-t border-neutral-100 pt-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-neutral-700">
+              저장된 룩 ({savedLooks.length})
+            </h2>
+            {savedLooksLoading && (
+              <span className="text-xs text-neutral-400">불러오는 중…</span>
+            )}
+          </div>
+
+          {savedLooks.length === 0 && !savedLooksLoading && (
+            <p className="mt-4 text-center text-xs text-neutral-300">
+              아직 저장된 룩이 없습니다
+            </p>
+          )}
+
+          <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-4">
+            {savedLooks.map((look) => (
+              <div key={look.id} className="flex flex-col gap-1">
+                <div className="aspect-square overflow-hidden rounded-xl bg-neutral-100">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={look.imageUrl}
+                    alt={look.originalFileName}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <p className="truncate text-[10px] text-neutral-400">
+                  {look.takenAt
+                    ? formatDateOnly(look.takenAt.toDate())
+                    : "날짜 없음"}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );
