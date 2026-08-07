@@ -885,7 +885,7 @@ export default function Home() {
 
           <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-4">
             {savedLooks.map((look) => (
-              <div key={look.id} className="flex flex-col gap-1">
+              <div key={look.id} className="flex flex-col gap-0.5">
                 <div className="aspect-square overflow-hidden rounded-xl bg-neutral-100">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -894,11 +894,31 @@ export default function Home() {
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <p className="truncate text-[10px] text-neutral-400">
+                <p className="truncate text-[10px] font-medium text-neutral-600">
                   {look.takenAt
                     ? formatDateOnly(look.takenAt.toDate())
                     : "날짜 없음"}
                 </p>
+                {look.weatherStatus === "success" && look.weather ? (
+                  <p className="truncate text-[10px] text-neutral-400">
+                    {look.weather.tempMax !== null
+                      ? `${look.weather.tempMax.toFixed(1)}℃`
+                      : "-"}
+                    /
+                    {look.weather.tempMin !== null
+                      ? `${look.weather.tempMin.toFixed(1)}℃`
+                      : "-"}
+                    {look.weather.weatherLabel ? ` · ${look.weather.weatherLabel}` : ""}
+                  </p>
+                ) : look.weatherStatus === "failed" ? (
+                  <p className="truncate text-[10px] text-neutral-300">
+                    날씨 조회 실패
+                  </p>
+                ) : (
+                  <p className="truncate text-[10px] text-neutral-300">
+                    날씨 정보 없음
+                  </p>
+                )}
               </div>
             ))}
           </div>
