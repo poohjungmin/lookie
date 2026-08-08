@@ -28,7 +28,7 @@ function getSegmenter(): Promise<ImageSegmenter> {
   return segmenterPromise;
 }
 
-function loadImage(file: File): Promise<{ img: HTMLImageElement; url: string }> {
+function loadImage(file: Blob): Promise<{ img: HTMLImageElement; url: string }> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -44,7 +44,7 @@ function loadImage(file: File): Promise<{ img: HTMLImageElement; url: string }> 
  * 세그멘터가 주는 건 마스크뿐이라, 원본을 캔버스에 그리고 마스크를
  * 알파 채널로 직접 합성한다.
  */
-export async function runMediapipe(file: File): Promise<CutoutRunResult> {
+export async function runMediapipe(file: Blob): Promise<CutoutRunResult> {
   const started = performance.now();
   let objectUrl: string | null = null;
   try {

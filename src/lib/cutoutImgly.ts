@@ -10,7 +10,7 @@ export type CutoutRunResult =
  * DEVELOPMENT ONLY (비교 페이지 전용) — @imgly/background-removal(AGPL-3.0,
  * ISNet 기반)로 배경을 제거한다. 실제 서비스에 채택할지는 비교 후 결정.
  */
-export async function runImgly(file: File): Promise<CutoutRunResult> {
+export async function runImgly(file: Blob): Promise<CutoutRunResult> {
   const started = performance.now();
   try {
     const blob = await removeBackground(file, {

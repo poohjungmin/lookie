@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { runImgly } from "@/lib/cutoutImgly";
 import { runMediapipe } from "@/lib/cutoutMediapipe";
+import { downscaleImage } from "@/lib/downscaleImage";
 
 /*
  * DEVELOPMENT ONLY — 전신 누끼 방식 두 가지(MediaPipe vs @imgly/background-removal)를
@@ -92,32 +93,44 @@ export default function CutoutComparePage() {
     setProcessing(true);
 
     // iPhone 메모리 문제를 피하기 위해 사진 한 장씩, 방식도 하나씩
-    // 순차적으로 처리한다 (병렬 실행 금지).
+    // 순차적으로 처리한다 (병렬 실행 금지). 원본을 그대로(수 MB, 12MP+)
+    // 두 WASM 모델에 먹이면 캔버스 픽셀 버퍼 + 모델 텐서 메모리가 겹쳐서
+    // iOS Safari가 탭을 강제 종료시키는 문제가 있어, 먼저 1024px로 줄인
+    // 사본을 두 방식 모두에 공통으로 사용한다 (비교 조건도 동일해짐).
     for (const row of initial) {
-      updateMethod(row.id, "mediapipe", { status: "running" });
-      const mp = await runMediapipe(row.file);
-      if (mp.ok) {
-        updateMethod(row.id, "mediapipe", {
-          status: "done",
-          url: URL.createObjectURL(mp.blob),
-          ms: mp.ms,
-          bytes: mp.blob.size,
-        });
-      } else {
-        updateMethod(row.id, "mediapipe", { status: "error", error: mp.error, ms: mp.ms });
-      }
+      try {
+        const resized = await downscaleImage(row.file, 1024, 0.85);
 
-      updateMethod(row.id, "imgly", { status: "running" });
-      const im = await runImgly(row.file);
-      if (im.ok) {
-        updateMethod(row.id, "imgly", {
-          status: "done",
-          url: URL.createObjectURL(im.blob),
-          ms: im.ms,
-          bytes: im.blob.size,
-        });
-      } else {
-        updateMethod(row.id, "imgly", { status: "error", error: im.error, ms: im.ms });
+        updateMethod(row.id, "mediapipe", { status: "running" });
+        const mp = await runMediapipe(resized);
+        if (mp.ok) {
+          updateMethod(row.id, "mediapipe", {
+            status: "done",
+            url: URL.createObjectURL(mp.blob),
+            ms: mp.ms,
+            bytes: mp.blob.size,
+          });
+        } else {
+          updateMethod(row.id, "mediapipe", { status: "error", error: mp.error, ms: mp.ms });
+        }
+
+        updateMethod(row.id, "imgly", { status: "running" });
+        const im = await runImgly(resized);
+        if (im.ok) {
+          updateMethod(row.id, "imgly", {
+            status: "done",
+            url: URL.createObjectURL(im.blob),
+            ms: im.ms,
+            bytes: im.blob.size,
+          });
+        } else {
+          updateMethod(row.id, "imgly", { status: "error", error: im.error, ms: im.ms });
+        }
+      } catch (err) {
+        // 이 사진에서 무슨 일이 나든 다음 사진 처리는 계속되어야 한다.
+        const message = err instanceof Error ? err.message : String(err);
+        updateMethod(row.id, "mediapipe", { status: "error", error: message });
+        updateMethod(row.id, "imgly", { status: "error", error: message });
       }
     }
 
