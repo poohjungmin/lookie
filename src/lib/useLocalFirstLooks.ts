@@ -25,6 +25,8 @@ function savedLookToCacheEntry(uid: string, look: SavedLook): CachedLook {
     lookId: look.id,
     imageUrl: look.imageUrl,
     thumbnailUrl: look.thumbnailUrl,
+    cutoutUrl: look.cutoutUrl,
+    cutoutThumbnailUrl: look.cutoutThumbnailUrl,
     takenAtMs: look.takenAt ? look.takenAt.toMillis() : null,
     latitude: look.latitude,
     longitude: look.longitude,
@@ -33,6 +35,8 @@ function savedLookToCacheEntry(uid: string, look: SavedLook): CachedLook {
     updatedAtMs: updatedAtMs(look),
     thumbBlob: null,
     thumbType: null,
+    cutoutThumbBlob: null,
+    cutoutThumbType: null,
     cachedAt: Date.now(),
   };
 }
@@ -44,6 +48,10 @@ function cacheEntryToDisplayLook(entry: CachedLook, thumbSrc: string): DisplayLo
     storagePath: "",
     thumbnailUrl: entry.thumbnailUrl,
     thumbnailStoragePath: null,
+    cutoutUrl: entry.cutoutUrl,
+    cutoutStoragePath: null,
+    cutoutThumbnailUrl: entry.cutoutThumbnailUrl,
+    cutoutThumbnailStoragePath: null,
     originalFileName: "",
     takenAt: entry.takenAtMs !== null ? Timestamp.fromMillis(entry.takenAtMs) : null,
     latitude: entry.latitude,
@@ -86,16 +94,25 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
   const objectUrls = useRef<Map<string, string>>(new Map());
   const cacheMap = useRef<Map<string, CachedLook>>(new Map());
 
+  // 목록/캘린더/홈에서 쓸 썸네일 우선순위 (요구사항 8):
+  // 1. IndexedDB에 캐시된 누끼 썸네일 Blob (네트워크 없음)
+  // 2. IndexedDB에 캐시된 일반 썸네일 Blob (누끼가 아직 없는 룩도 local-first 유지)
+  // 3. 원격 누끼 썸네일 URL
+  // 4. 원격 일반 썸네일 URL
+  // 5. 원본 imageUrl (최후의 수단 - 목록에서 원본을 우선 쓰지 않는다)
   const getThumbSrc = useCallback((entry: CachedLook): string => {
-    if (entry.thumbBlob) {
-      let url = objectUrls.current.get(entry.lookId);
+    const cachedBlob = entry.cutoutThumbBlob ?? entry.thumbBlob;
+    if (cachedBlob) {
+      const cacheField = entry.cutoutThumbBlob ? "cutout" : "thumb";
+      const objectUrlKey = `${entry.lookId}:${cacheField}`;
+      let url = objectUrls.current.get(objectUrlKey);
       if (!url) {
-        url = URL.createObjectURL(entry.thumbBlob);
-        objectUrls.current.set(entry.lookId, url);
+        url = URL.createObjectURL(cachedBlob);
+        objectUrls.current.set(objectUrlKey, url);
       }
       return url;
     }
-    return entry.thumbnailUrl ?? entry.imageUrl;
+    return entry.cutoutThumbnailUrl ?? entry.thumbnailUrl ?? entry.imageUrl;
   }, []);
 
   const publishFromCacheMap = useCallback(() => {
@@ -157,10 +174,13 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
       for (const lookId of Array.from(cacheMap.current.keys())) {
         if (!remoteIds.has(lookId)) {
           cacheMap.current.delete(lookId);
-          const url = objectUrls.current.get(lookId);
-          if (url) {
-            URL.revokeObjectURL(url);
-            objectUrls.current.delete(lookId);
+          for (const field of ["cutout", "thumb"]) {
+            const key = `${lookId}:${field}`;
+            const url = objectUrls.current.get(key);
+            if (url) {
+              URL.revokeObjectURL(url);
+              objectUrls.current.delete(key);
+            }
           }
           await deleteCachedLook(uid, lookId);
         }
@@ -172,10 +192,12 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
       for (const look of remote) {
         const remoteUpdated = updatedAtMs(look);
         const existing = cacheMap.current.get(look.id);
+        const needsCutoutThumb = !!look.cutoutThumbnailUrl;
+        const hasNeededBlob = needsCutoutThumb ? !!existing?.cutoutThumbBlob : !!existing?.thumbBlob;
 
-        // 캐시에 이미 있고, 서버 쪽이 더 새롭지 않고, 썸네일 Blob도 이미 있다면
-        // Storage에서 다시 받지 않는다 (요구사항: 변경 없는 룩은 재다운로드 금지).
-        if (existing && existing.thumbBlob && existing.updatedAtMs >= remoteUpdated) {
+        // 캐시에 이미 있고, 서버 쪽이 더 새롭지 않고, 화면에 쓸 블롭도 이미
+        // 있다면 Storage에서 다시 받지 않는다 (요구사항: 변경 없는 룩은 재다운로드 금지).
+        if (existing && hasNeededBlob && existing.updatedAtMs >= remoteUpdated) {
           reusedCount++;
           continue;
         }
@@ -184,17 +206,30 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
         entry.updatedAtMs = remoteUpdated;
         entry.thumbBlob = existing?.thumbBlob ?? null;
         entry.thumbType = existing?.thumbType ?? null;
+        entry.cutoutThumbBlob = existing?.cutoutThumbBlob ?? null;
+        entry.cutoutThumbType = existing?.cutoutThumbType ?? null;
 
-        const srcUrl = look.thumbnailUrl ?? look.imageUrl;
-        if (srcUrl) {
+        if (!entry.thumbBlob && look.thumbnailUrl) {
           try {
-            const res = await fetch(srcUrl);
+            const res = await fetch(look.thumbnailUrl);
             if (res.ok) {
               entry.thumbBlob = await res.blob();
               entry.thumbType = entry.thumbBlob.type;
             }
           } catch {
             // 썸네일을 못 받아도 메타데이터는 캐시해 두고, 화면은 원격 URL로 폴백한다.
+          }
+        }
+
+        if (!entry.cutoutThumbBlob && look.cutoutThumbnailUrl) {
+          try {
+            const res = await fetch(look.cutoutThumbnailUrl);
+            if (res.ok) {
+              entry.cutoutThumbBlob = await res.blob();
+              entry.cutoutThumbType = entry.cutoutThumbBlob.type;
+            }
+          } catch {
+            // 누끼 썸네일을 못 받아도 일반 썸네일/원본으로 폴백된다.
           }
         }
 

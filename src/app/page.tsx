@@ -67,20 +67,16 @@ export default function HomePage() {
         {placeholderPicks.length > 0 && (
           <div className="mt-5 grid grid-cols-2 gap-3">
             {placeholderPicks.map((look) => (
-              <Link
-                key={look.id}
-                href={`/looks/${look.id}`}
-                className="block overflow-hidden rounded-2xl bg-neutral-100"
-              >
-                <div className="aspect-[3/4]">
+              <Link key={look.id} href={`/looks/${look.id}`} className="block">
+                <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={look.thumbSrc}
                     alt=""
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain"
                   />
                 </div>
-                <p className="px-2.5 py-2 text-[11px] text-neutral-400">
+                <p className="mt-2 text-center text-[11px] text-neutral-400">
                   {look.takenAt ? formatDateOnly(look.takenAt.toDate()) : ""}
                 </p>
               </Link>

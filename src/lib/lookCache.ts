@@ -19,6 +19,10 @@ export type CachedLook = {
   lookId: string;
   imageUrl: string;
   thumbnailUrl: string | null;
+  /** 상세 화면용 누끼 (긴 변 약 1000px). */
+  cutoutUrl: string | null;
+  /** 목록/캘린더/홈에서 원본보다 우선 쓰는 누끼 썸네일 (요구사항 8의 우선순위 1~2번). */
+  cutoutThumbnailUrl: string | null;
   takenAtMs: number | null;
   latitude: number | null;
   longitude: number | null;
@@ -28,6 +32,8 @@ export type CachedLook = {
   updatedAtMs: number;
   thumbBlob: Blob | null;
   thumbType: string | null;
+  cutoutThumbBlob: Blob | null;
+  cutoutThumbType: string | null;
   cachedAt: number;
 };
 

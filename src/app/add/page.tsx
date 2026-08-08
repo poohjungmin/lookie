@@ -72,6 +72,7 @@ export default function AddPage() {
               <div className="absolute inset-x-0 bottom-0 bg-black/45 px-2 py-1 text-center text-[10px] text-white">
                 {item.saveStage === "idle" && "처리 중…"}
                 {item.saveStage === "uploading-photo" && "저장 중…"}
+                {item.saveStage === "generating-cutout" && "누끼 생성 중…"}
                 {item.saveStage === "saving-record" && "저장 중…"}
                 {item.saveStage === "saved" && "완료"}
                 {item.saveStage === "duplicate" && "이미 등록됨"}

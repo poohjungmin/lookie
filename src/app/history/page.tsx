@@ -70,17 +70,17 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-5 pb-10 pt-10 sm:px-6">
-      <header className="mb-6">
+    <div className="mx-auto max-w-2xl px-3 pb-10 pt-10 sm:px-6">
+      <header className="mb-6 px-2">
         <p className="text-xs font-medium tracking-wide text-neutral-400">
           LOOKIE
         </p>
         <h1 className="mt-1 text-xl font-semibold text-neutral-900">
-          히스토리
+          캘린더
         </h1>
       </header>
 
-      <div className="flex items-center justify-between px-1">
+      <div className="flex items-center justify-between px-3">
         <button
           type="button"
           onClick={goPrevMonth}
@@ -102,17 +102,21 @@ export default function HistoryPage() {
         </button>
       </div>
 
-      <div className="mt-3 grid grid-cols-7 gap-1 text-center text-[11px] text-neutral-300">
+      <div className="mt-3 grid grid-cols-7 gap-1 px-1 text-center text-[10px] text-neutral-300">
         {WEEKDAY_LABELS.map((w) => (
           <div key={w}>{w}</div>
         ))}
       </div>
 
-      <div className="mt-1 grid grid-cols-7 gap-1.5">
+      {/* 전신 누끼가 잘 보이도록 정사각형이 아니라 세로로 긴 카드 비율을
+          쓴다 (가로 대비 세로 약 1.4배). 날짜 숫자는 상단에 작게,
+          누끼는 셀 중앙~하단에 object-contain으로 채운다. */}
+      <div className="mt-1 grid grid-cols-7 gap-1">
         {cells.map((date, i) => {
           if (!date) return <div key={i} />;
           const key = dateKey(date);
           const dayLooks = looksByDay.get(key);
+          const extraCount = dayLooks ? dayLooks.length - 1 : 0;
           const isSelected = key === selectedKey;
           const isToday = dateKey(today) === key;
 
@@ -122,30 +126,33 @@ export default function HistoryPage() {
               type="button"
               onClick={() => setSelectedKey(isSelected ? null : key)}
               className={
-                "relative flex aspect-square items-center justify-center overflow-hidden rounded-lg text-xs " +
+                "relative flex aspect-[1/1.4] flex-col overflow-hidden rounded-lg bg-neutral-50 " +
                 (isSelected ? "ring-2 ring-neutral-900" : "")
               }
             >
-              {dayLooks && dayLooks[0] ? (
-                <>
+              <span
+                className={
+                  "px-1 pt-0.5 text-left text-[10px] leading-tight " +
+                  (isToday ? "font-semibold text-neutral-900" : "text-neutral-400")
+                }
+              >
+                {date.getDate()}
+              </span>
+
+              {dayLooks && dayLooks[0] && (
+                <div className="relative flex-1 px-0.5 pb-0.5">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={dayLooks[0].thumbSrc}
                     alt=""
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain object-bottom"
                   />
-                  <span className="absolute bottom-0.5 right-0.5 rounded bg-black/50 px-1 text-[9px] leading-4 text-white">
-                    {date.getDate()}
-                  </span>
-                </>
-              ) : (
-                <span
-                  className={
-                    isToday ? "font-semibold text-neutral-900" : "text-neutral-400"
-                  }
-                >
-                  {date.getDate()}
-                </span>
+                  {extraCount > 0 && (
+                    <span className="absolute bottom-0.5 right-0.5 rounded-full bg-neutral-900/80 px-1 text-[9px] leading-4 text-white">
+                      +{extraCount}
+                    </span>
+                  )}
+                </div>
               )}
             </button>
           );
@@ -153,7 +160,7 @@ export default function HistoryPage() {
       </div>
 
       {selectedKey && (
-        <section className="mt-8 border-t border-neutral-100 pt-6">
+        <section className="mt-8 border-t border-neutral-100 px-2 pt-6">
           <h2 className="text-sm font-medium text-neutral-700">
             {selectedKey.split("-").map(Number).join(".")}
           </h2>
@@ -162,18 +169,18 @@ export default function HistoryPage() {
               이 날 저장된 룩이 없습니다
             </p>
           ) : (
-            <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="mt-4 grid grid-cols-2 gap-4">
               {selectedLooks.map((look) => (
                 <Link
                   key={look.id}
                   href={`/looks/${look.id}`}
-                  className="block aspect-square overflow-hidden rounded-xl bg-neutral-100"
+                  className="block aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={look.thumbSrc}
                     alt=""
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain"
                   />
                 </Link>
               ))}

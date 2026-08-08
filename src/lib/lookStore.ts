@@ -2,6 +2,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   serverTimestamp,
   Timestamp,
   collection,
@@ -35,6 +36,16 @@ export type LookRecord = {
    */
   thumbnailUrl: string | null;
   thumbnailStoragePath: string | null;
+  /**
+   * 사람 전체를 배경에서 분리한 상세용(긴 변 약 1000px) 투명 이미지.
+   * 이 필드가 추가되기 전 룩과, 누끼 생성이 실패한 룩은 null이다 -
+   * UI에서는 항상 `cutoutUrl ?? thumbnailUrl ?? imageUrl` 순으로 폴백한다.
+   */
+  cutoutUrl: string | null;
+  cutoutStoragePath: string | null;
+  /** 목록/캘린더/홈용 누끼 썸네일(긴 변 약 400~500px, 가능하면 투명 WebP). */
+  cutoutThumbnailUrl: string | null;
+  cutoutThumbnailStoragePath: string | null;
   originalFileName: string;
 
   takenAt: Timestamp | null;
@@ -113,6 +124,51 @@ export async function uploadLookThumbnail(
   return { thumbnailUrl, thumbnailStoragePath: storagePath };
 }
 
+export async function uploadLookCutout(
+  uid: string,
+  lookId: string,
+  blob: Blob
+): Promise<{ cutoutUrl: string; cutoutStoragePath: string }> {
+  const storagePath = `users/${uid}/looks/${lookId}/cutout`;
+  const storageRef = ref(storage, storagePath);
+  await uploadBytes(storageRef, blob, { contentType: blob.type || "image/png" });
+  const cutoutUrl = await getDownloadURL(storageRef);
+  return { cutoutUrl, cutoutStoragePath: storagePath };
+}
+
+export async function uploadLookCutoutThumbnail(
+  uid: string,
+  lookId: string,
+  blob: Blob
+): Promise<{ cutoutThumbnailUrl: string; cutoutThumbnailStoragePath: string }> {
+  const storagePath = `users/${uid}/looks/${lookId}/cutout-thumb`;
+  const storageRef = ref(storage, storagePath);
+  await uploadBytes(storageRef, blob, { contentType: blob.type || "image/png" });
+  const cutoutThumbnailUrl = await getDownloadURL(storageRef);
+  return { cutoutThumbnailUrl, cutoutThumbnailStoragePath: storagePath };
+}
+
+/**
+ * 기존 룩에 누끼 필드만 추가로 채운다 (마이그레이션용).
+ * 다른 필드는 건드리지 않고, updatedAt만 다시 찍어서 local-first 캐시가
+ * 이 변경을 감지해 썸네일을 다시 받도록 한다.
+ */
+export async function updateLookCutoutFields(
+  uid: string,
+  lookId: string,
+  patch: {
+    cutoutUrl: string;
+    cutoutStoragePath: string;
+    cutoutThumbnailUrl: string;
+    cutoutThumbnailStoragePath: string;
+  }
+): Promise<void> {
+  await updateDoc(lookDocRef(uid, lookId), {
+    ...patch,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function saveLookRecord(
   uid: string,
   lookId: string,
@@ -140,6 +196,10 @@ function normalizeLookDoc(id: string, raw: Partial<LookRecord>): SavedLook {
     storagePath: raw.storagePath ?? "",
     thumbnailUrl: raw.thumbnailUrl ?? null,
     thumbnailStoragePath: raw.thumbnailStoragePath ?? null,
+    cutoutUrl: raw.cutoutUrl ?? null,
+    cutoutStoragePath: raw.cutoutStoragePath ?? null,
+    cutoutThumbnailUrl: raw.cutoutThumbnailUrl ?? null,
+    cutoutThumbnailStoragePath: raw.cutoutThumbnailStoragePath ?? null,
     originalFileName: raw.originalFileName ?? "",
     takenAt: raw.takenAt ?? null,
     latitude: raw.latitude ?? null,

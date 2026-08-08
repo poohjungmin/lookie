@@ -115,7 +115,7 @@ export default function BottomNav() {
         <NavLink href="/" label="홈" active={pathname === "/"}>
           <HomeIcon active={pathname === "/"} />
         </NavLink>
-        <NavLink href="/history" label="히스토리" active={pathname === "/history"}>
+        <NavLink href="/history" label="캘린더" active={pathname === "/history"}>
           <CalendarIcon active={pathname === "/history"} />
         </NavLink>
         <NavLink href="/add" label="추가" active={isAdd}>

@@ -30,23 +30,23 @@ export default function LooksPage() {
         </p>
       )}
 
-      <div className="grid grid-cols-3 gap-1.5">
+      {/* SNS 피드 느낌을 피하려고 카드 간격을 넉넉히 두고, 배경을 흰색/연한
+          회색으로 통일해 누끼 전신이 또렷이 보이게 한다 (object-contain). */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-6">
         {looks.map((look) => (
-          <Link
-            key={look.id}
-            href={`/looks/${look.id}`}
-            className="relative block aspect-square overflow-hidden rounded-lg bg-neutral-100"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={look.thumbSrc}
-              alt=""
-              className="h-full w-full object-cover"
-            />
+          <Link key={look.id} href={`/looks/${look.id}`} className="block">
+            <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={look.thumbSrc}
+                alt=""
+                className="h-full w-full object-contain"
+              />
+            </div>
             {look.takenAt && (
-              <span className="absolute bottom-1 left-1 rounded bg-black/40 px-1.5 py-0.5 text-[10px] text-white">
+              <p className="mt-2 text-center text-[11px] text-neutral-400">
                 {formatDateOnly(look.takenAt.toDate())}
-              </span>
+              </p>
             )}
           </Link>
         ))}

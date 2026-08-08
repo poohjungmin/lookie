@@ -9,17 +9,21 @@ import {
   lookAlreadyExists,
   uploadLookPhoto,
   uploadLookThumbnail,
+  uploadLookCutout,
+  uploadLookCutoutThumbnail,
   saveLookRecord,
   type DbWeather,
   type DbWeatherStatus,
 } from "@/lib/lookStore";
 import { generateThumbnail } from "@/lib/thumbnail";
+import { generateCutout } from "@/lib/cutout";
 import { cacheKeyOf, putCachedLook } from "@/lib/lookCache";
 
 type WeatherStage = "no-date" | "no-gps" | "done" | "error";
 export type SaveStage =
   | "idle"
   | "uploading-photo"
+  | "generating-cutout"
   | "saving-record"
   | "saved"
   | "duplicate"
@@ -108,6 +112,31 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         }
       }
 
+      // 사람 전체 누끼 생성 - 실패해도(모델 로드 실패, 메모리 부족 등) 룩
+      // 저장 자체는 그대로 진행되고, 화면에는 원본/썸네일로 자연스럽게
+      // 폴백된다. 나중에 /dev/cutout-migrate에서 다시 시도할 수 있다.
+      updateItem(item.id, { saveStage: "generating-cutout" });
+      const cutout = await generateCutout(item.file);
+
+      let cutoutUrl: string | null = null;
+      let cutoutStoragePath: string | null = null;
+      let cutoutThumbnailUrl: string | null = null;
+      let cutoutThumbnailStoragePath: string | null = null;
+      if (cutout) {
+        try {
+          const [detail, thumb] = await Promise.all([
+            uploadLookCutout(uid, fingerprint, cutout.detailBlob),
+            uploadLookCutoutThumbnail(uid, fingerprint, cutout.thumbBlob),
+          ]);
+          cutoutUrl = detail.cutoutUrl;
+          cutoutStoragePath = detail.cutoutStoragePath;
+          cutoutThumbnailUrl = thumb.cutoutThumbnailUrl;
+          cutoutThumbnailStoragePath = thumb.cutoutThumbnailStoragePath;
+        } catch {
+          // 업로드 실패 - 원본/썸네일로 폴백하며 계속 진행
+        }
+      }
+
       const weatherPayload: DbWeather | null = weather
         ? {
             weatherCode: weather.weatherCode,
@@ -127,6 +156,10 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         storagePath,
         thumbnailUrl,
         thumbnailStoragePath,
+        cutoutUrl,
+        cutoutStoragePath,
+        cutoutThumbnailUrl,
+        cutoutThumbnailStoragePath,
         originalFileName: item.file.name,
         takenAt: meta.dateTimeOriginal ? Timestamp.fromDate(meta.dateTimeOriginal) : null,
         latitude: meta.latitude,
@@ -139,14 +172,16 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         fingerprint,
       });
 
-      // 이미 메모리에 썸네일 Blob이 있으니, 다음 동기화 때 다시 내려받지 않도록
-      // 지금 바로 로컬 캐시에 반영한다.
+      // 이미 메모리에 썸네일/누끼 Blob이 있으니, 다음 동기화 때 다시
+      // 내려받지 않도록 지금 바로 로컬 캐시에 반영한다.
       await putCachedLook({
         cacheKey: cacheKeyOf(uid, fingerprint),
         uid,
         lookId: fingerprint,
         imageUrl,
         thumbnailUrl,
+        cutoutUrl,
+        cutoutThumbnailUrl,
         takenAtMs: meta.dateTimeOriginal ? meta.dateTimeOriginal.getTime() : null,
         latitude: meta.latitude,
         longitude: meta.longitude,
@@ -155,6 +190,8 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         updatedAtMs: Date.now(),
         thumbBlob,
         thumbType: thumbBlob?.type ?? null,
+        cutoutThumbBlob: cutout?.thumbBlob ?? null,
+        cutoutThumbType: cutout?.thumbBlob.type ?? null,
         cachedAt: Date.now(),
       });
 
