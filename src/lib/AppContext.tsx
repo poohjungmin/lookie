@@ -12,6 +12,8 @@ export type AppContextValue = {
   /** 마지막 동기화가 실패했는지 (오프라인 등) - 캐시된 데이터는 계속 보여준다 */
   offline: boolean;
   refreshLooks: () => Promise<void>;
+  /** Firestore 문서 + Storage 파일 + 로컬 캐시 + 화면 상태까지 완전히 지운다. */
+  deleteLook: (lookId: string) => Promise<void>;
   signOutUser: () => void;
 };
 

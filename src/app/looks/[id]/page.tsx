@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
@@ -7,7 +8,10 @@ import { formatDateOnly } from "@/lib/format";
 export default function LookDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { looks, syncing } = useApp();
+  const { looks, syncing, deleteLook } = useApp();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const look = looks.find((l) => l.id === id);
 
@@ -28,6 +32,22 @@ export default function LookDetailPage() {
     );
   }
 
+  async function handleConfirmDelete() {
+    if (!look) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteLook(look.id);
+      // 목록/캘린더/홈은 공용 Context 상태를 쓰므로 삭제 즉시 거기서도 사라진다.
+      router.replace("/looks");
+    } catch (err) {
+      setDeleting(false);
+      setDeleteError(
+        `삭제에 실패했어요: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   return (
     <div className="mx-auto max-w-2xl pb-10">
       <div className="relative">
@@ -38,6 +58,23 @@ export default function LookDetailPage() {
           className="absolute left-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-neutral-700 shadow"
         >
           ←
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setDeleteError(null);
+            setConfirmOpen(true);
+          }}
+          aria-label="룩 삭제"
+          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-neutral-700 shadow"
+        >
+          {/* 휴지통 아이콘 */}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 7h16" />
+            <path d="M9 7V4h6v3" />
+            <path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+            <path d="M10 11v6M14 11v6" />
+          </svg>
         </button>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={look.imageUrl} alt="" className="w-full object-cover" />
@@ -85,6 +122,42 @@ export default function LookDetailPage() {
           카테고리 · 꾸밈 정도 (준비 중)
         </div>
       </div>
+
+      {/* 삭제 확인 모달 - 실수 방지를 위해 상세화면 → 삭제 아이콘 → 확인,
+          반드시 2단계를 거치게 한다 (탭 한 번으로 바로 삭제하지 않음). */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
+          <div className="w-full max-w-sm rounded-t-3xl bg-white p-6 sm:rounded-3xl">
+            <p className="text-base font-semibold text-neutral-900">
+              이 룩을 삭제할까요?
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-neutral-500">
+              사진과 해당 날짜의 룩 기록이 모두 삭제됩니다.
+            </p>
+            {deleteError && (
+              <p className="mt-3 text-xs text-red-600">{deleteError}</p>
+            )}
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmOpen(false)}
+                disabled={deleting}
+                className="flex-1 rounded-2xl border border-neutral-200 py-3 text-sm font-medium text-neutral-700 disabled:opacity-50"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={deleting}
+                className="flex-1 rounded-2xl bg-red-600 py-3 text-sm font-medium text-white disabled:bg-red-300"
+              >
+                {deleting ? "삭제 중…" : "삭제"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

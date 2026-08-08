@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Timestamp } from "firebase/firestore";
-import { fetchUserLooks, type SavedLook } from "@/lib/lookStore";
+import { fetchUserLooks, deleteLookCompletely, type SavedLook } from "@/lib/lookStore";
 import {
   cacheKeyOf,
   deleteCachedLook,
@@ -122,6 +122,18 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     setLooks(display);
   }, [getThumbSrc]);
 
+  /** 이 lookId로 만들어둔 object URL(누끼/일반 썸네일 둘 다)을 정리한다. */
+  const revokeObjectUrlsFor = useCallback((lookId: string) => {
+    for (const field of ["cutout", "thumb"]) {
+      const key = `${lookId}:${field}`;
+      const url = objectUrls.current.get(key);
+      if (url) {
+        URL.revokeObjectURL(url);
+        objectUrls.current.delete(key);
+      }
+    }
+  }, []);
+
   // uid가 바뀔 때(로그인/로그아웃/계정 전환)마다 이전 계정의 상태를 완전히 비운다.
   // -> 다른 계정의 캐시가 화면에 잠깐이라도 비치지 않도록 한다.
   useEffect(() => {
@@ -174,14 +186,7 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
       for (const lookId of Array.from(cacheMap.current.keys())) {
         if (!remoteIds.has(lookId)) {
           cacheMap.current.delete(lookId);
-          for (const field of ["cutout", "thumb"]) {
-            const key = `${lookId}:${field}`;
-            const url = objectUrls.current.get(key);
-            if (url) {
-              URL.revokeObjectURL(url);
-              objectUrls.current.delete(key);
-            }
-          }
+          revokeObjectUrlsFor(lookId);
           await deleteCachedLook(uid, lookId);
         }
       }
@@ -259,7 +264,7 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     } finally {
       setSyncing(false);
     }
-  }, [uid, log, publishFromCacheMap]);
+  }, [uid, log, publishFromCacheMap, revokeObjectUrlsFor]);
 
   useEffect(() => {
     if (!uid) return;
@@ -267,5 +272,23 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     syncNow();
   }, [uid, syncNow]);
 
-  return { looks, initialSource, syncing, offline, refresh: syncNow };
+  // 룩 하나를 완전히 삭제한다: Firebase(Storage 파일들 + Firestore 문서) ->
+  // IndexedDB 캐시 -> 화면(React state) 순으로 지운다. Firebase 삭제가
+  // 실패하면(권한 문제 등) 로컬 상태는 건드리지 않고 그대로 에러를 던진다 -
+  // 그래야 실제로는 안 지워졌는데 화면에서만 사라지는 상황을 피할 수 있다.
+  const deleteLook = useCallback(
+    async (lookId: string) => {
+      if (!uid) return;
+      await deleteLookCompletely(uid, lookId);
+
+      cacheMap.current.delete(lookId);
+      revokeObjectUrlsFor(lookId);
+      await deleteCachedLook(uid, lookId);
+      publishFromCacheMap();
+      log(`[local-first] 룩 삭제 완료 (lookId=${lookId})`);
+    },
+    [uid, revokeObjectUrlsFor, publishFromCacheMap, log]
+  );
+
+  return { looks, initialSource, syncing, offline, refresh: syncNow, deleteLook };
 }

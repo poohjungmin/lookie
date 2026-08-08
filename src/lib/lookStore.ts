@@ -3,6 +3,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   serverTimestamp,
   Timestamp,
   collection,
@@ -10,7 +11,7 @@ import {
   orderBy,
   getDocs,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { db, storage } from "@/lib/firebaseClient";
 
 /** Firestore에 저장하는 날씨 상태 - UI의 세분화된 상태를 3가지로 단순화한다. */
@@ -179,6 +180,33 @@ export async function saveLookRecord(
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+}
+
+/**
+ * Storage 파일 하나를 지운다. 이미 없는 파일(storage/object-not-found)이거나
+ * 그 외 어떤 이유로 실패하든 여기서 막히면 안 된다 - 파일 하나의 삭제
+ * 실패 때문에 나머지 파일/Firestore 문서 삭제까지 멈추면 안 된다는 요구사항.
+ */
+async function safeDeleteStorageFile(path: string): Promise<void> {
+  try {
+    await deleteObject(ref(storage, path));
+  } catch {
+    // 무시 - object-not-found를 포함해 어떤 에러든 삭제 흐름을 막지 않는다.
+  }
+}
+
+/**
+ * 룩 하나를 완전히 삭제한다: Storage의 original/thumbnail/cutout/cutout-thumb
+ * (존재하는 것만) + Firestore 문서. uid는 항상 로그인된 본인의 uid만
+ * 호출부에서 넘기도록 되어 있고, Firestore/Storage 보안 규칙도 동일하게
+ * request.auth.uid == uid만 허용하므로 다른 사용자의 룩은 애초에 지울 수 없다.
+ */
+export async function deleteLookCompletely(uid: string, lookId: string): Promise<void> {
+  const base = `users/${uid}/looks/${lookId}`;
+  const paths = [`${base}/original`, `${base}/thumbnail`, `${base}/cutout`, `${base}/cutout-thumb`];
+
+  await Promise.allSettled(paths.map(safeDeleteStorageFile));
+  await deleteDoc(lookDocRef(uid, lookId));
 }
 
 export type SavedLook = LookRecord & { id: string };
