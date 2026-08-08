@@ -7,6 +7,13 @@ const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
 
+// selfie_segmenter는 사람/배경 2클래스를 argmax로 내놓는 모델이 아니라,
+// 픽셀별 "사람일 확률"(0~1) 하나만 내놓는 이진 confidence 모델이다.
+// outputCategoryMask로 받으면 버전에 따라 항상 0(배경)으로만 채워지는
+// 문제가 실측 확인되어(결과가 거의 완전히 투명하게 나옴), MediaPipe 공식
+// 예제와 동일하게 confidence mask를 받아 직접 threshold를 적용한다.
+const PERSON_CONFIDENCE_THRESHOLD = 0.5;
+
 let segmenterPromise: Promise<ImageSegmenter> | null = null;
 
 function getSegmenter(): Promise<ImageSegmenter> {
@@ -20,8 +27,8 @@ function getSegmenter(): Promise<ImageSegmenter> {
           // 일관성을 위해 CPU로 고정한다.
           delegate: "CPU",
         },
-        outputCategoryMask: true,
-        outputConfidenceMasks: false,
+        outputCategoryMask: false,
+        outputConfidenceMasks: true,
       });
     })();
   }
@@ -40,9 +47,9 @@ function loadImage(file: Blob): Promise<{ img: HTMLImageElement; url: string }> 
 
 /**
  * DEVELOPMENT ONLY (비교 페이지 전용) — MediaPipe Selfie Segmenter
- * (Apache-2.0, 2클래스: 배경/사람)로 배경을 제거한다.
+ * (Apache-2.0, 사람/배경 confidence 마스크)로 배경을 제거한다.
  * 세그멘터가 주는 건 마스크뿐이라, 원본을 캔버스에 그리고 마스크를
- * 알파 채널로 직접 합성한다.
+ * threshold를 적용해 알파 채널로 직접 합성한다.
  */
 export async function runMediapipe(file: Blob): Promise<CutoutRunResult> {
   const started = performance.now();
@@ -60,10 +67,10 @@ export async function runMediapipe(file: Blob): Promise<CutoutRunResult> {
     ctx.drawImage(img, 0, 0);
 
     const result = segmenter.segment(img);
-    const mask = result.categoryMask;
+    const mask = result.confidenceMasks?.[0];
     if (!mask) throw new Error("세그멘테이션 마스크 없음");
 
-    const maskData = mask.getAsUint8Array(); // 0 = 배경, 1 = 사람
+    const maskData = mask.getAsFloat32Array(); // 픽셀별 "사람일 확률" 0~1
     const maskWidth = mask.width;
     const maskHeight = mask.height;
 
@@ -75,7 +82,7 @@ export async function runMediapipe(file: Blob): Promise<CutoutRunResult> {
       const rowOffset = my * maskWidth;
       for (let x = 0; x < canvas.width; x++) {
         const mx = Math.min(maskWidth - 1, Math.floor((x / canvas.width) * maskWidth));
-        const isPerson = maskData[rowOffset + mx] === 1;
+        const isPerson = maskData[rowOffset + mx] >= PERSON_CONFIDENCE_THRESHOLD;
         if (!isPerson) {
           pixels[(y * canvas.width + x) * 4 + 3] = 0;
         }
