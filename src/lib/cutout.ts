@@ -34,7 +34,9 @@ export const SEGMENT_INPUT_MAX_DIMENSION = 1024;
 // 낮은 것으로 취급된다.
 // v3: 얇고 긴 배경 잔여물(엘리베이터 손잡이/난간/거울 프레임 등) 제거
 // cleanup을 추가 - /dev/mask-cleanup-test에서 검증 후 적용.
-export const CURRENT_CUTOUT_VERSION = 3;
+// v4: OPENING_EROSION_RADIUS 2 -> 7 (2px로는 두꺼운 손잡이/파이프형
+// 잔여물이 안 끊어지는 케이스가 실측돼 강도를 올림).
+export const CURRENT_CUTOUT_VERSION = 4;
 
 // --- 사람 크기/위치 정규화 -------------------------------------------------
 // 정규화는 이 내부 작업용 캔버스(2:3 세로 비율) 위에서 한 번 수행하고,
@@ -66,8 +68,9 @@ export const COMPONENT_WINDOW_MARGIN_RATIO = 0.06;
 // 이 반지름(분석 해상도 픽셀 기준)의 지름(2*R)보다 얇게 사람 본체와 이어진
 // 가지(엘리베이터 손잡이/난간 등)를 잘라낸다. /dev/mask-cleanup-test에서
 // 여러 샘플로 검증한 값 - 팔/다리/긴소매/가방끈처럼 이보다 두꺼운 부위는
-// opening-by-reconstruction(아래)이 원래 두께로 복원한다.
-export const OPENING_EROSION_RADIUS = 2;
+// opening-by-reconstruction(아래)이 원래 두께로 복원한다. 2px로는 두꺼운
+// 파이프형 손잡이가 안 끊기는 케이스가 있어 7px로 올렸다.
+export const OPENING_EROSION_RADIUS = 7;
 
 /** 자동으로 검출된 사람 bbox(원본 대비 0~1 비율, personalization 보정 "전" 값)와
  * 이번 실행에서 개인화 보정이 실제로 적용됐는지. manualCropCorrection 기록을

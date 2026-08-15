@@ -54,11 +54,11 @@ import {
 export const CLEANUP_ANALYSIS_MAX_DIM = 512;
 
 // 이 반지름(픽셀, CLEANUP_ANALYSIS_MAX_DIM 좌표계 기준)의 지름(2*R)보다
-// 얇은 가지를 잘라낸다. 512px 분석 해상도에서 2px 반경 = 지름 4px 미만
-// 굵기의 가지만 제거 대상 - 난간/봉은 보통 이보다 얇게 보이고, 팔뚝/손목
-// 같은 실제 신체는 이보다 두껍게 보이는 경우가 많다는 전제에서 보수적으로
-// 시작한다. 사람이 잘리면 이 값을 줄이고, 잔여물이 안 지워지면 늘린다.
-export const OPENING_EROSION_RADIUS = 2;
+// 얇은 가지를 잘라낸다. 처음엔 2px(지름 4px)로 시작했지만, 두꺼운 파이프형
+// 손잡이가 안 끊기는 케이스가 실측돼 7px로 올렸다(현재 production 기본값과
+// 동일 - cutout.ts OPENING_EROSION_RADIUS). 사람이 잘리면 이 값을 줄이고,
+// 잔여물이 안 지워지면 늘린다.
+export const OPENING_EROSION_RADIUS = 7;
 
 export type CleanupMetrics = {
   analysisWidth: number;
