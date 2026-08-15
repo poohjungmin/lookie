@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import type { DisplayLook } from "@/lib/useLocalFirstLooks";
 import LookThumbImage from "@/components/LookThumbImage";
@@ -30,13 +31,41 @@ function buildMonthGrid(year: number, month: number): (Date | null)[] {
   return cells;
 }
 
-export default function HistoryPage() {
+function HistoryPageInner() {
   const { looks, syncing } = useApp();
   const today = new Date();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
-  const [viewYear, setViewYear] = useState(today.getFullYear());
-  const [viewMonth, setViewMonth] = useState(today.getMonth());
+  // year/month를 URL 쿼리에서 복원한다 - 상세 화면에서 뒤로가기, 새로고침,
+  // PWA 재실행 어느 경우에도 보고 있던 달을 그대로 유지하기 위함
+  // (쿼리가 없으면 오늘 기준 달로 시작한다). month는 URL에서는 1-indexed로
+  // 쓰고(사람이 읽기 자연스럽게), 내부 계산은 계속 0-indexed를 쓴다.
+  const urlYear = searchParams.get("year");
+  const urlMonth = searchParams.get("month");
+  const initialYear = urlYear ? Number(urlYear) : today.getFullYear();
+  const initialMonth = urlMonth ? Number(urlMonth) - 1 : today.getMonth();
+
+  const [viewYear, setViewYear] = useState(
+    Number.isFinite(initialYear) ? initialYear : today.getFullYear()
+  );
+  const [viewMonth, setViewMonth] = useState(
+    Number.isFinite(initialMonth) && initialMonth >= 0 && initialMonth <= 11
+      ? initialMonth
+      : today.getMonth()
+  );
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  // 달이 바뀔 때마다 URL도 같이 갱신한다 - replace라 히스토리 스택에는
+  // 쌓이지 않는다(이전/다음 달 버튼을 눌렀다고 뒤로가기가 달 단위로 쌓이면
+  // 오히려 불편하다). 이 URL 자체가 "지금 보고 있는 달"의 저장소 역할을 한다.
+  const syncUrl = useCallback(
+    (year: number, month0: number) => {
+      router.replace(`${pathname}?year=${year}&month=${month0 + 1}`, { scroll: false });
+    },
+    [router, pathname]
+  );
 
   const looksByDay = useMemo(() => {
     const map = new Map<string, DisplayLook[]>();
@@ -58,23 +87,25 @@ export default function HistoryPage() {
 
   function goPrevMonth() {
     setSelectedKey(null);
-    if (viewMonth === 0) {
-      setViewYear((y) => y - 1);
-      setViewMonth(11);
-    } else {
-      setViewMonth((m) => m - 1);
-    }
+    const nextYear = viewMonth === 0 ? viewYear - 1 : viewYear;
+    const nextMonth = viewMonth === 0 ? 11 : viewMonth - 1;
+    setViewYear(nextYear);
+    setViewMonth(nextMonth);
+    syncUrl(nextYear, nextMonth);
   }
 
   function goNextMonth() {
     setSelectedKey(null);
-    if (viewMonth === 11) {
-      setViewYear((y) => y + 1);
-      setViewMonth(0);
-    } else {
-      setViewMonth((m) => m + 1);
-    }
+    const nextYear = viewMonth === 11 ? viewYear + 1 : viewYear;
+    const nextMonth = viewMonth === 11 ? 0 : viewMonth + 1;
+    setViewYear(nextYear);
+    setViewMonth(nextMonth);
+    syncUrl(nextYear, nextMonth);
   }
+
+  // 상세 화면에서 뒤로가기를 누르면 정확히 이 달로 돌아오도록, 링크에
+  // 출처(calendar)와 지금 보고 있는 달을 그대로 실어 보낸다.
+  const detailLinkSuffix = `from=calendar&year=${viewYear}&month=${viewMonth + 1}`;
 
   return (
     <div className="mx-auto max-w-2xl px-3 pb-10 pt-10 sm:px-6">
@@ -179,7 +210,11 @@ export default function HistoryPage() {
           ) : (
             <div className="mt-4 grid grid-cols-2 gap-4">
               {selectedLooks.map((look) => (
-                <Link key={look.id} href={`/looks/${look.id}`} className="block">
+                <Link
+                  key={look.id}
+                  href={`/looks/${look.id}?${detailLinkSuffix}`}
+                  className="block"
+                >
                   <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
                     <LookThumbImage look={look} className="h-full w-full object-contain" />
                   </div>
@@ -208,5 +243,19 @@ export default function HistoryPage() {
         </p>
       )}
     </div>
+  );
+}
+
+export default function HistoryPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-2xl px-3 pt-10 text-center sm:px-6">
+          <p className="text-sm text-neutral-400">불러오는 중…</p>
+        </div>
+      }
+    >
+      <HistoryPageInner />
+    </Suspense>
   );
 }

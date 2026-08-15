@@ -39,7 +39,7 @@ export default function LooksPage() {
           차지하면서 잘리지 않는다. 배경은 흰색/연한 회색으로 통일. */}
       <div className="grid grid-cols-3 gap-x-2 gap-y-5">
         {looks.map((look) => (
-          <Link key={look.id} href={`/looks/${look.id}`} className="block">
+          <Link key={look.id} href={`/looks/${look.id}?from=looks`} className="block">
             <div className="aspect-[3/4] overflow-hidden rounded-xl bg-neutral-50">
               <LookThumbImage look={look} className="h-full w-full object-contain" />
             </div>

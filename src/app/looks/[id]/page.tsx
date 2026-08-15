@@ -1,17 +1,39 @@
 "use client";
 
-import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
 import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import { saveManualCropCorrection } from "@/lib/personalCropHeuristic";
 import ManualCutoutCropModal, { type ManualCropResult } from "@/components/ManualCutoutCropModal";
+import LookDetailGallery from "@/components/LookDetailGallery";
 
-export default function LookDetailPage() {
+/**
+ * 뒤로가기 목적지를 URL 쿼리(from/year/month)로부터 계산한다. 실제 브라우저
+ * 히스토리 유무에 기대는 router.back() 대신, 출처 정보로부터 항상 같은
+ * 목적지 URL을 만들어 Link로 이동한다 - PWA를 새로 열어 상세로 바로
+ * 진입했거나(히스토리가 없음) 새로고침한 경우에도 결과가 예측 가능하다.
+ * 출처 정보가 없으면 전체 룩으로 폴백한다.
+ */
+function resolveBackHref(searchParams: URLSearchParams): string {
+  const from = searchParams.get("from");
+  if (from === "calendar") {
+    const year = searchParams.get("year");
+    const month = searchParams.get("month");
+    if (year && month) return `/history?year=${year}&month=${month}`;
+    return "/history";
+  }
+  if (from === "home") return "/";
+  return "/looks";
+}
+
+function LookDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, looks, syncing, deleteLook, refreshSingleLook } = useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -24,6 +46,7 @@ export default function LookDetailPage() {
   const [cropError, setCropError] = useState<string | null>(null);
   const [cropDone, setCropDone] = useState(false);
 
+  const backHref = resolveBackHref(searchParams);
   const look = looks.find((l) => l.id === id);
 
   if (!look) {
@@ -32,13 +55,12 @@ export default function LookDetailPage() {
         <p className="text-sm text-neutral-400">
           {syncing ? "불러오는 중…" : "룩을 찾을 수 없습니다"}
         </p>
-        <button
-          type="button"
-          onClick={() => router.back()}
-          className="mt-4 text-sm text-neutral-500 underline underline-offset-2"
+        <Link
+          href={backHref}
+          className="mt-4 inline-block text-sm text-neutral-500 underline underline-offset-2"
         >
           돌아가기
-        </button>
+        </Link>
       </div>
     );
   }
@@ -99,7 +121,9 @@ export default function LookDetailPage() {
       }
 
       // 목록 전체를 다시 훑지 않고 이 룩 하나만 즉시 최신 상태로 갱신한다 -
-      // 홈/캘린더/전체 룩이 별도 새로고침 없이 바로 새 누끼를 보여준다.
+      // 상세 화면 1페이지 누끼/홈/캘린더/전체 룩이 별도 새로고침 없이 바로
+      // 새 누끼를 보여준다 (IndexedDB/React state/object URL/cache busting은
+      // refreshSingleLook 내부에서 기존 구조 그대로 처리된다).
       await refreshSingleLook(look.id);
       setCropOriginalBlob(null);
       setCropDone(true);
@@ -117,7 +141,7 @@ export default function LookDetailPage() {
     try {
       await deleteLook(look.id);
       // 목록/캘린더/홈은 공용 Context 상태를 쓰므로 삭제 즉시 거기서도 사라진다.
-      router.replace("/looks");
+      router.replace(backHref);
     } catch (err) {
       setDeleting(false);
       setDeleteError(
@@ -129,14 +153,13 @@ export default function LookDetailPage() {
   return (
     <div className="mx-auto max-w-2xl pb-10">
       <div className="relative">
-        <button
-          type="button"
-          onClick={() => router.back()}
+        <Link
+          href={backHref}
           aria-label="뒤로"
           className="absolute left-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-neutral-700 shadow"
         >
           ←
-        </button>
+        </Link>
         <button
           type="button"
           onClick={() => {
@@ -154,8 +177,7 @@ export default function LookDetailPage() {
             <path d="M10 11v6M14 11v6" />
           </svg>
         </button>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={look.imageUrl} alt="" className="w-full object-cover" />
+        <LookDetailGallery look={look} />
       </div>
 
       <div className="px-5 pt-6 sm:px-6">
@@ -195,51 +217,22 @@ export default function LookDetailPage() {
           )}
         </div>
 
-        {/* 누끼가 잘못 잘렸거나 배경이 안 지워졌을 때, 개발 도구를 거치지
-            않고 이 사진만 바로 고칠 수 있는 카드. 자동 재생성은 쓰지 않아서
-            제거했고, 원본에서 영역을 직접 지정하는 방식만 남겼다. */}
-        <div className="mt-4 rounded-2xl border border-neutral-100 p-5">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-neutral-700">누끼 이미지</p>
-            <span className="text-xs text-neutral-400">
-              {look.cutoutUrl ? "생성됨" : "없음"}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-neutral-400">
-            사람이 이상하게 잘렸거나 배경이 안 지워졌다면 직접 영역을 지정해서 고쳐보세요.
-          </p>
-
-          {look.cutoutUrl ?? look.cutoutThumbnailUrl ? (
-            <div className="mt-3 aspect-[3/4] overflow-hidden rounded-xl bg-neutral-50">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={look.cutoutUrl ?? look.cutoutThumbnailUrl ?? undefined}
-                alt=""
-                className="h-full w-full object-contain"
-              />
-            </div>
-          ) : (
-            <p className="mt-3 rounded-xl bg-neutral-50 py-8 text-center text-xs text-neutral-300">
-              아직 누끼가 없어요
-            </p>
-          )}
-
-          <button
-            type="button"
-            onClick={handleStartManualCrop}
-            disabled={cropLoading || cropBusy}
-            className="mt-3 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
-          >
-            {cropLoading ? "원본 불러오는 중…" : "✂️ 누끼 수정"}
-          </button>
-
-          {cropDone && (
-            <p className="mt-2 text-xs text-neutral-500">다시 생성했어요.</p>
-          )}
-          {cropError && (
-            <p className="mt-2 text-xs text-red-600">실패: {cropError}</p>
-          )}
-        </div>
+        {/* 별도 누끼 미리보기 카드는 제거했다 - 위 갤러리 1페이지에서 이미
+            누끼를 크게 보여주므로 중복이다. 수정 버튼만 남긴다. */}
+        <button
+          type="button"
+          onClick={handleStartManualCrop}
+          disabled={cropLoading || cropBusy}
+          className="mt-4 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
+        >
+          {cropLoading ? "원본 불러오는 중…" : "✂️ 누끼 수정"}
+        </button>
+        {cropDone && (
+          <p className="mt-2 text-center text-xs text-neutral-500">다시 생성했어요.</p>
+        )}
+        {cropError && (
+          <p className="mt-2 text-center text-xs text-red-600">실패: {cropError}</p>
+        )}
 
         {/* 향후 카테고리·꾸밈 정도 표시 공간 (Vision AI 붙기 전까지는 비워둠) */}
         <div className="mt-4 rounded-2xl border border-dashed border-neutral-200 p-5 text-center text-xs text-neutral-300">
@@ -295,5 +288,19 @@ export default function LookDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function LookDetailPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-2xl px-5 pt-16 text-center sm:px-6">
+          <p className="text-sm text-neutral-400">불러오는 중…</p>
+        </div>
+      }
+    >
+      <LookDetailPageInner />
+    </Suspense>
   );
 }

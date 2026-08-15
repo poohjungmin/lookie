@@ -17,7 +17,7 @@ export default function RecommendedLookCard({ look }: { look: DisplayLook }) {
   const tempMin = look.weather?.tempMin ?? null;
 
   return (
-    <Link href={`/looks/${look.id}`} className="block w-28 shrink-0 sm:w-32">
+    <Link href={`/looks/${look.id}?from=home`} className="block w-28 shrink-0 sm:w-32">
       <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
         <LookThumbImage look={look} className="h-full w-full object-contain" />
       </div>
