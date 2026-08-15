@@ -10,25 +10,31 @@ import {
 } from "@/lib/lookStore";
 
 /*
- * DEVELOPMENT ONLY — Storage에 남아있는 original 이미지로 cutout/cutout-thumb를
+ * 개발용 도구 — Storage에 남아있는 original 이미지로 cutout/cutout-thumb를
  * 최신 정규화 알고리즘으로 다시 만들어 덮어쓰는 일괄 재처리 도구.
  * cutoutVersion이 CURRENT_CUTOUT_VERSION보다 낮은(또는 아예 없는) 룩만
  * 대상으로 삼고, 이미 최신인 룩은 건너뛴다.
+ *
+ * 접근 제어: 이 페이지도 다른 모든 페이지와 마찬가지로 루트 레이아웃의
+ * AppShell(Google 로그인 게이트) 안에서만 렌더링된다 - useApp()은 로그인
+ * 전에는 아예 호출될 수 없다. 여기서 쓰는 user.uid는 항상 "현재 로그인한
+ * 본인"이고, looks도 그 uid로만 조회된 목록이라 다른 사용자의
+ * users/{uid}/looks/*  데이터에는 애초에 접근할 수 없다. Firestore/Storage
+ * 보안 규칙도 동일하게 request.auth.uid == uid만 허용해 이중으로 막는다.
  *
  * 절대 건드리지 않는 것: Firestore 문서 삭제, lookId, createdAt, 날씨,
  * EXIF(위경도/촬영일) - 오직 Storage의 cutout/cutout-thumb 파일과 Firestore의
  * cutoutUrl/cutoutThumbnailUrl/(관련 storagePath)/cutoutVersion/updatedAt만 바뀐다.
  *
- * 다 쓰고 나면 이 라우트(src/app/dev/cutout-migrate) 전체를 삭제하면 된다 -
- * 다른 코드는 이 페이지를 참조하지 않는다.
- *
  * 한 번에 전부 Promise.all로 돌리지 않고 for...of로 한 장씩 순차 처리한다
  * (generateCutout 자체도 앱 전체에서 직렬화되어 있지만, 원본 다운로드 등
  * 다른 단계까지 겹치지 않도록 여기서도 한 번에 한 장만 진행한다) -
  * 사진이 많아도(수백~수천 장) iPhone 메모리 사용량이 폭증하지 않게 하기 위함.
+ *
+ * 마이그레이션이 끝나면 이 상수를 false로 바꿔 production에서 다시
+ * 숨긴다 (라우트 자체를 지우지 않아도 즉시 비활성화 가능).
  */
-
-const isDev = process.env.NODE_ENV !== "production";
+const ENABLE_CUTOUT_MIGRATION = true;
 
 type ItemStatus = "pending" | "downloading" | "generating" | "uploading" | "done" | "skipped" | "error";
 
@@ -45,6 +51,7 @@ export default function CutoutMigratePage() {
   const [running, setRunning] = useState(false);
   const [processedCount, setProcessedCount] = useState(0);
   const [finished, setFinished] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const pendingLooks = looks.filter((l) => (l.cutoutVersion ?? 0) < CURRENT_CUTOUT_VERSION);
 
@@ -53,6 +60,7 @@ export default function CutoutMigratePage() {
   }
 
   async function start() {
+    setConfirmOpen(false);
     if (running) return;
     const targets = pendingLooks;
     if (targets.length === 0) return;
@@ -111,13 +119,14 @@ export default function CutoutMigratePage() {
   }
 
   const doneCount = items.filter((i) => i.status === "done").length;
-  const failCount = items.filter((i) => i.status === "error" || i.status === "skipped").length;
+  const skippedCount = items.filter((i) => i.status === "skipped").length;
+  const errorCount = items.filter((i) => i.status === "error").length;
 
-  if (!isDev) {
+  if (!ENABLE_CUTOUT_MIGRATION) {
     return (
       <div className="mx-auto max-w-2xl px-5 pt-16 text-center sm:px-6">
         <p className="text-sm text-neutral-400">
-          이 기능은 개발 모드에서만 사용할 수 있습니다.
+          이 도구는 현재 비활성화되어 있습니다.
         </p>
       </div>
     );
@@ -126,8 +135,8 @@ export default function CutoutMigratePage() {
   return (
     <div className="mx-auto max-w-2xl px-5 pb-16 pt-10 sm:px-6">
       <header className="mb-6">
-        <p className="text-xs font-medium tracking-wide text-neutral-400">
-          DEV ONLY
+        <p className="text-xs font-medium tracking-wide text-amber-600">
+          개발용 도구 — 기존 누끼 재생성
         </p>
         <h1 className="mt-1 text-xl font-semibold text-neutral-900">
           누끼 다시 생성
@@ -135,13 +144,14 @@ export default function CutoutMigratePage() {
         <p className="mt-2 text-sm text-neutral-500">
           현재 알고리즘 버전 {CURRENT_CUTOUT_VERSION}보다 낮은(또는 아예 없는)
           룩 {pendingLooks.length}개를 원본 이미지로 다시 처리합니다. 사진이
-          많으면 시간이 걸릴 수 있어요.
+          많으면 시간이 걸릴 수 있어요. 본인({user.email ?? user.uid})의
+          룩만 대상입니다.
         </p>
       </header>
 
       <button
         type="button"
-        onClick={start}
+        onClick={() => setConfirmOpen(true)}
         disabled={running || pendingLooks.length === 0}
         className="w-full rounded-2xl bg-neutral-900 py-4 text-center text-sm font-medium text-white disabled:bg-neutral-300"
       >
@@ -154,13 +164,13 @@ export default function CutoutMigratePage() {
 
       {finished && (
         <p className="mt-4 text-center text-sm font-medium text-neutral-700">
-          완료 - 성공 {doneCount}장 · 실패 {failCount}장
+          완료 - 성공 {doneCount}장 · 건너뜀 {skippedCount}장 · 실패 {errorCount}장
         </p>
       )}
 
       {!finished && items.length > 0 && (
         <p className="mt-4 text-center text-xs text-neutral-500">
-          {items.length}개 중 {processedCount}개 처리됨 (완료 {doneCount} · 실패/건너뜀 {failCount})
+          {items.length}개 중 {processedCount}개 처리됨 (성공 {doneCount} · 건너뜀 {skippedCount} · 실패 {errorCount})
         </p>
       )}
 
@@ -197,6 +207,38 @@ export default function CutoutMigratePage() {
           </li>
         ))}
       </ul>
+
+      {/* 실수로 바로 실행되지 않도록, 버튼을 눌러도 곧바로 시작하지 않고
+          한 번 더 확인한다. */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
+          <div className="w-full max-w-sm rounded-t-3xl bg-white p-6 sm:rounded-3xl">
+            <p className="text-base font-semibold text-neutral-900">
+              누끼를 다시 생성할까요?
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-neutral-500">
+              기존 룩의 누끼 이미지를 최신 알고리즘으로 다시 생성합니다.
+              원본 사진과 날짜·날씨 정보는 변경되지 않습니다.
+            </p>
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmOpen(false)}
+                className="flex-1 rounded-2xl border border-neutral-200 py-3 text-sm font-medium text-neutral-700"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={start}
+                className="flex-1 rounded-2xl bg-neutral-900 py-3 text-sm font-medium text-white"
+              >
+                시작
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
