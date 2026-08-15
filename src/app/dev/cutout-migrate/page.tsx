@@ -222,24 +222,58 @@ export default function CutoutMigratePage() {
       note: `storagePath=${storagePath} · ${bucketNote}`,
     });
 
-    // 3. Storage 원본 다운로드 (SDK getBlob - 공개 download URL을 fetch하지 않음)
+    // 3. Storage 원본 다운로드 - 버킷은 일치하는 걸 확인했으니, 이번엔
+    // SDK getBlob()과 공개 download URL fetch()를 "동시에" 시도해서 같은
+    // 순간·같은 네트워크 조건에서 어느 쪽이 실제로 되는지 직접 비교한다.
     updateDiagStep("download", { status: "running" });
-    let originalBlob: Blob;
-    try {
-      originalBlob = await withTimeout(
-        downloadLookOriginal(user.uid, target.id, target.storagePath),
-        DOWNLOAD_TIMEOUT_MS,
-        "Storage 원본 다운로드"
+
+    const sdkStarted = performance.now();
+    const sdkAttempt: Promise<{ ok: true; blob: Blob; ms: number } | { ok: false; err: unknown }> =
+      withTimeout(downloadLookOriginal(user.uid, target.id, target.storagePath), DOWNLOAD_TIMEOUT_MS, "SDK getBlob").then(
+        (blob) => ({ ok: true as const, blob, ms: Math.round(performance.now() - sdkStarted) }),
+        (err) => ({ ok: false as const, err })
       );
-    } catch (err) {
+
+    const fetchStarted = performance.now();
+    const fetchAttempt: Promise<{ ok: true; blob: Blob; ms: number } | { ok: false; err: unknown }> = (async () => {
+      if (!target.imageUrl) return { ok: false as const, err: new Error("imageUrl 없음") };
+      try {
+        const res = await withTimeout(fetch(target.imageUrl), DOWNLOAD_TIMEOUT_MS, "공개 URL fetch");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        return { ok: true as const, blob, ms: Math.round(performance.now() - fetchStarted) };
+      } catch (err) {
+        return { ok: false as const, err };
+      }
+    })();
+
+    const [sdkResult, fetchResult] = await Promise.all([sdkAttempt, fetchAttempt]);
+
+    const sdkNote = sdkResult.ok
+      ? `SDK getBlob: 성공 (${sdkResult.ms}ms)`
+      : `SDK getBlob: 실패 - ${describeError("", sdkResult.err).name}: ${describeError("", sdkResult.err).message}`;
+    const fetchNote = fetchResult.ok
+      ? `공개 URL fetch: 성공 (${fetchResult.ms}ms)`
+      : `공개 URL fetch: 실패 - ${describeError("", fetchResult.err).name}: ${describeError("", fetchResult.err).message}`;
+
+    let originalBlob: Blob;
+    if (sdkResult.ok) {
+      originalBlob = sdkResult.blob;
+    } else if (fetchResult.ok) {
+      originalBlob = fetchResult.blob;
+    } else {
       updateDiagStep("download", {
         status: "fail",
-        error: describeError("Storage 원본 다운로드", err, storagePath),
+        error: describeError("Storage 원본 다운로드 (SDK·fetch 둘 다 실패)", sdkResult.err, storagePath),
+        note: `${sdkNote}\n${fetchNote}`,
       });
       setDiagRunning(false);
       return;
     }
-    updateDiagStep("download", { status: "ok" });
+    updateDiagStep("download", {
+      status: "ok",
+      note: `${sdkNote}\n${fetchNote}\n→ 이번엔 ${sdkResult.ok ? "SDK" : "공개 URL fetch"} 결과를 사용`,
+    });
 
     // 4. Blob 생성 확인
     updateDiagStep("blob", { status: "running" });
@@ -509,7 +543,9 @@ export default function CutoutMigratePage() {
                       {DIAG_STEP_LABELS[key]}
                     </span>
                   </div>
-                  {s.note && <p className="ml-5 text-[11px] text-neutral-400">{s.note}</p>}
+                  {s.note && (
+                    <p className="ml-5 whitespace-pre-line text-[11px] text-neutral-400">{s.note}</p>
+                  )}
                   {s.error && (
                     <div className="ml-5">
                       <StepErrorView error={s.error} />
