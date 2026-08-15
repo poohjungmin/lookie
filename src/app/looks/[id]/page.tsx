@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
-import { regenerateLookCutout } from "@/lib/regenerateCutout";
+import { regenerateLookCutout, regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
+import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
+import ManualCutoutCropModal from "@/components/ManualCutoutCropModal";
 
 export default function LookDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +18,12 @@ export default function LookDetailPage() {
   const [regenerating, setRegenerating] = useState(false);
   const [regenerateError, setRegenerateError] = useState<string | null>(null);
   const [regenerateDone, setRegenerateDone] = useState(false);
+
+  // 수동 영역 지정 재생성: 원본 로딩 -> 크롭 모달 -> 크롭 결과로 재생성.
+  const [cropLoading, setCropLoading] = useState(false);
+  const [cropOriginalBlob, setCropOriginalBlob] = useState<Blob | null>(null);
+  const [cropBusy, setCropBusy] = useState(false);
+  const [cropError, setCropError] = useState<string | null>(null);
 
   const look = looks.find((l) => l.id === id);
 
@@ -49,6 +57,47 @@ export default function LookDetailPage() {
       setRegenerateError(err instanceof Error ? err.message : String(err));
     } finally {
       setRegenerating(false);
+    }
+  }
+
+  // 자동 정규화가 사람을 잘못 판단한 예외 사진을 위한 경로. 원본을 먼저
+  // 불러온 뒤 크롭 모달을 띄우고, 사용자가 고른 영역만 재생성 파이프라인에 넣는다.
+  async function handleStartManualCrop() {
+    if (!look) return;
+    setCropError(null);
+    setRegenerateError(null);
+    setRegenerateDone(false);
+    setCropLoading(true);
+    try {
+      const { blob } = await downloadOriginalWithFallbacks(
+        user.uid,
+        look.id,
+        look.storagePath,
+        look.imageUrl
+      );
+      setCropOriginalBlob(blob);
+    } catch (err) {
+      setCropError(
+        `원본을 불러오지 못했어요: ${err instanceof Error ? err.message : String(err)}`
+      );
+    } finally {
+      setCropLoading(false);
+    }
+  }
+
+  async function handleConfirmCrop(croppedBlob: Blob) {
+    if (!look) return;
+    setCropBusy(true);
+    setCropError(null);
+    try {
+      await regenerateLookCutoutFromCrop(user.uid, look.id, croppedBlob);
+      await refreshLooks();
+      setCropOriginalBlob(null);
+      setRegenerateDone(true);
+    } catch (err) {
+      setCropError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCropBusy(false);
     }
   }
 
@@ -168,16 +217,31 @@ export default function LookDetailPage() {
           <button
             type="button"
             onClick={handleRegenerateCutout}
-            disabled={regenerating}
+            disabled={regenerating || cropLoading || cropBusy}
             className="mt-3 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
           >
-            {regenerating ? "누끼 다시 생성 중…" : "🔄 누끼 다시 생성"}
+            {regenerating ? "자동으로 다시 생성 중…" : "🔄 자동으로 다시 생성"}
           </button>
+
+          {/* 사람이 원본에서 작거나 거울 난간 등으로 자동 정규화가 실패한
+              예외 사진용 - 영역을 직접 맞춰서 그 부분만 다시 생성한다. */}
+          <button
+            type="button"
+            onClick={handleStartManualCrop}
+            disabled={regenerating || cropLoading || cropBusy}
+            className="mt-2 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
+          >
+            {cropLoading ? "원본 불러오는 중…" : "🎯 영역 지정해서 다시 생성"}
+          </button>
+
           {regenerateDone && (
             <p className="mt-2 text-xs text-neutral-500">다시 생성했어요.</p>
           )}
           {regenerateError && (
             <p className="mt-2 text-xs text-red-600">실패: {regenerateError}</p>
+          )}
+          {cropError && (
+            <p className="mt-2 text-xs text-red-600">실패: {cropError}</p>
           )}
         </div>
 
@@ -221,6 +285,18 @@ export default function LookDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {cropOriginalBlob && (
+        <ManualCutoutCropModal
+          imageBlob={cropOriginalBlob}
+          busy={cropBusy}
+          onCancel={() => {
+            if (cropBusy) return;
+            setCropOriginalBlob(null);
+          }}
+          onConfirm={handleConfirmCrop}
+        />
       )}
     </div>
   );
