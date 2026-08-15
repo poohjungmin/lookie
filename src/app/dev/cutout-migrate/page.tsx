@@ -60,6 +60,37 @@ function describeError(step: string, err: unknown, target?: string): StepError {
   };
 }
 
+/**
+ * getBlob() 등 일부 단계가 에러 없이(reject도 resolve도 안 하고) 그냥
+ * 멈춰버리는 경우가 실측 확인되었다 - CORS 거부처럼 즉시 실패하는 게
+ * 아니라 응답 자체가 안 오는 상태. 무한 대기를 막고, 최소한 "몇 초 내에
+ * 응답 없음"이라는 진단 정보라도 남기기 위한 타임아웃 래퍼.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const err = new Error(`${label} - ${Math.round(ms / 1000)}초 내에 응답 없음 (timeout)`);
+      err.name = "TimeoutError";
+      reject(err);
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+const DOWNLOAD_TIMEOUT_MS = 20000;
+const CUTOUT_TIMEOUT_MS = 60000; // 첫 실행 시 모델을 CDN에서 받아야 할 수 있어 넉넉히
+const UPLOAD_TIMEOUT_MS = 20000;
+const FIRESTORE_TIMEOUT_MS = 15000;
+
 function StepErrorView({ error }: { error: StepError }) {
   return (
     <div className="mt-1 rounded-lg bg-red-50 p-2 text-[11px] leading-relaxed text-red-700">
@@ -177,7 +208,11 @@ export default function CutoutMigratePage() {
     updateDiagStep("download", { status: "running" });
     let originalBlob: Blob;
     try {
-      originalBlob = await downloadLookOriginal(user.uid, target.id, target.storagePath);
+      originalBlob = await withTimeout(
+        downloadLookOriginal(user.uid, target.id, target.storagePath),
+        DOWNLOAD_TIMEOUT_MS,
+        "Storage 원본 다운로드"
+      );
     } catch (err) {
       updateDiagStep("download", {
         status: "fail",
@@ -202,7 +237,18 @@ export default function CutoutMigratePage() {
 
     // 5~7. 누끼 모델 로드 / 세그멘테이션 / 정규화
     updateDiagStep("cutout", { status: "running" });
-    const diag = await generateCutoutWithDiagnostics(originalBlob);
+    let diag;
+    try {
+      diag = await withTimeout(
+        generateCutoutWithDiagnostics(originalBlob),
+        CUTOUT_TIMEOUT_MS,
+        "누끼 모델 로드/세그멘테이션/정규화"
+      );
+    } catch (err) {
+      updateDiagStep("cutout", { status: "fail", error: describeError("누끼 생성(타임아웃)", err) });
+      setDiagRunning(false);
+      return;
+    }
     if (!diag.ok) {
       const stepLabel: Record<CutoutDiagnosticStep, string> = {
         "model-or-segment": "누끼 모델 로드/세그멘테이션 (CDN에서 모델을 못 받았거나 추론 실패)",
@@ -227,7 +273,11 @@ export default function CutoutMigratePage() {
     let cutoutUrl: string;
     let cutoutStoragePath: string;
     try {
-      const r = await uploadLookCutout(user.uid, target.id, diag.result.detailBlob);
+      const r = await withTimeout(
+        uploadLookCutout(user.uid, target.id, diag.result.detailBlob),
+        UPLOAD_TIMEOUT_MS,
+        "cutout 업로드"
+      );
       cutoutUrl = r.cutoutUrl;
       cutoutStoragePath = r.cutoutStoragePath;
     } catch (err) {
@@ -245,7 +295,11 @@ export default function CutoutMigratePage() {
     let cutoutThumbnailUrl: string;
     let cutoutThumbnailStoragePath: string;
     try {
-      const r = await uploadLookCutoutThumbnail(user.uid, target.id, diag.result.thumbBlob);
+      const r = await withTimeout(
+        uploadLookCutoutThumbnail(user.uid, target.id, diag.result.thumbBlob),
+        UPLOAD_TIMEOUT_MS,
+        "cutout-thumb 업로드"
+      );
       cutoutThumbnailUrl = r.cutoutThumbnailUrl;
       cutoutThumbnailStoragePath = r.cutoutThumbnailStoragePath;
     } catch (err) {
@@ -261,13 +315,17 @@ export default function CutoutMigratePage() {
     // 10. Firestore 업데이트
     updateDiagStep("firestore", { status: "running" });
     try {
-      await updateLookCutoutFields(user.uid, target.id, {
-        cutoutUrl,
-        cutoutStoragePath,
-        cutoutThumbnailUrl,
-        cutoutThumbnailStoragePath,
-        cutoutVersion: CURRENT_CUTOUT_VERSION,
-      });
+      await withTimeout(
+        updateLookCutoutFields(user.uid, target.id, {
+          cutoutUrl,
+          cutoutStoragePath,
+          cutoutThumbnailUrl,
+          cutoutThumbnailStoragePath,
+          cutoutVersion: CURRENT_CUTOUT_VERSION,
+        }),
+        FIRESTORE_TIMEOUT_MS,
+        "Firestore 업데이트"
+      );
     } catch (err) {
       updateDiagStep("firestore", {
         status: "fail",
@@ -296,13 +354,21 @@ export default function CutoutMigratePage() {
     for (const look of targets) {
       try {
         updateItem(look.id, { status: "running", currentStep: "Storage 원본 다운로드" });
-        const originalBlob = await downloadLookOriginal(user.uid, look.id, look.storagePath);
+        const originalBlob = await withTimeout(
+          downloadLookOriginal(user.uid, look.id, look.storagePath),
+          DOWNLOAD_TIMEOUT_MS,
+          "Storage 원본 다운로드"
+        );
         if (!originalBlob || originalBlob.size === 0) {
           throw new Error("다운로드된 Blob 크기가 0");
         }
 
         updateItem(look.id, { currentStep: "누끼 모델 로드/처리/정규화" });
-        const diag = await generateCutoutWithDiagnostics(originalBlob);
+        const diag = await withTimeout(
+          generateCutoutWithDiagnostics(originalBlob),
+          CUTOUT_TIMEOUT_MS,
+          "누끼 모델 로드/세그멘테이션/정규화"
+        );
         if (!diag.ok) {
           updateItem(look.id, {
             status: "skipped",
@@ -317,18 +383,26 @@ export default function CutoutMigratePage() {
 
         updateItem(look.id, { currentStep: "cutout 업로드" });
         const [detail, thumb] = await Promise.all([
-          uploadLookCutout(user.uid, look.id, diag.result.detailBlob),
-          uploadLookCutoutThumbnail(user.uid, look.id, diag.result.thumbBlob),
+          withTimeout(uploadLookCutout(user.uid, look.id, diag.result.detailBlob), UPLOAD_TIMEOUT_MS, "cutout 업로드"),
+          withTimeout(
+            uploadLookCutoutThumbnail(user.uid, look.id, diag.result.thumbBlob),
+            UPLOAD_TIMEOUT_MS,
+            "cutout-thumb 업로드"
+          ),
         ]);
 
         updateItem(look.id, { currentStep: "Firestore 업데이트" });
-        await updateLookCutoutFields(user.uid, look.id, {
-          cutoutUrl: detail.cutoutUrl,
-          cutoutStoragePath: detail.cutoutStoragePath,
-          cutoutThumbnailUrl: thumb.cutoutThumbnailUrl,
-          cutoutThumbnailStoragePath: thumb.cutoutThumbnailStoragePath,
-          cutoutVersion: CURRENT_CUTOUT_VERSION,
-        });
+        await withTimeout(
+          updateLookCutoutFields(user.uid, look.id, {
+            cutoutUrl: detail.cutoutUrl,
+            cutoutStoragePath: detail.cutoutStoragePath,
+            cutoutThumbnailUrl: thumb.cutoutThumbnailUrl,
+            cutoutThumbnailStoragePath: thumb.cutoutThumbnailStoragePath,
+            cutoutVersion: CURRENT_CUTOUT_VERSION,
+          }),
+          FIRESTORE_TIMEOUT_MS,
+          "Firestore 업데이트"
+        );
 
         updateItem(look.id, { status: "done" });
       } catch (err) {
