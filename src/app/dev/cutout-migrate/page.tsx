@@ -13,6 +13,13 @@ import {
   uploadLookCutoutThumbnail,
   updateLookCutoutFields,
 } from "@/lib/lookStore";
+import { storage } from "@/lib/firebaseClient";
+
+/** download URL(https://firebasestorage.googleapis.com/v0/b/{bucket}/o/...)에서 버킷 이름만 뽑아낸다. */
+function extractBucketFromUrl(url: string): string | null {
+  const match = url.match(/\/b\/([^/]+)\/o\//);
+  return match ? match[1] : null;
+}
 
 /*
  * 개발용 도구 — Storage에 남아있는 original 이미지로 cutout/cutout-thumb를
@@ -191,7 +198,9 @@ export default function CutoutMigratePage() {
     // 1. Firestore 문서 확인 - 이미 looks 목록에 있으므로 그 자체가 성공.
     updateDiagStep("doc", { status: "ok", note: `lookId=${target.id}` });
 
-    // 2. original 경로 확인
+    // 2. original 경로 확인 - SDK가 지금 연결된 버킷과, imageUrl에 실제로
+    // 박혀 있는(업로드 당시의) 버킷이 다르면 getBlob()이 엉뚱한 곳을 찾다가
+    // 멈추거나 실패할 수 있다. 여기서 미리 비교해 눈으로 확인한다.
     updateDiagStep("path", { status: "running" });
     const storagePath = target.storagePath || `users/${user.uid}/looks/${target.id}/original`;
     if (!target.imageUrl && !target.storagePath) {
@@ -202,7 +211,16 @@ export default function CutoutMigratePage() {
       setDiagRunning(false);
       return;
     }
-    updateDiagStep("path", { status: "ok", note: `storagePath=${storagePath}` });
+    const sdkBucket = storage.app.options.storageBucket ?? "(설정 없음)";
+    const urlBucket = target.imageUrl ? extractBucketFromUrl(target.imageUrl) : null;
+    const bucketNote =
+      urlBucket && urlBucket !== sdkBucket
+        ? `⚠ 버킷 불일치! SDK=${sdkBucket} / imageUrl=${urlBucket}`
+        : `버킷 일치: ${sdkBucket}`;
+    updateDiagStep("path", {
+      status: "ok",
+      note: `storagePath=${storagePath} · ${bucketNote}`,
+    });
 
     // 3. Storage 원본 다운로드 (SDK getBlob - 공개 download URL을 fetch하지 않음)
     updateDiagStep("download", { status: "running" });
