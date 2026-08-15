@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
+import LookThumbImage from "@/components/LookThumbImage";
 
 function todayKorean(): string {
   return new Date().toLocaleDateString("ko-KR", {
@@ -69,12 +70,7 @@ export default function HomePage() {
             {placeholderPicks.map((look) => (
               <Link key={look.id} href={`/looks/${look.id}`} className="block">
                 <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={look.thumbSrc}
-                    alt=""
-                    className="h-full w-full object-contain"
-                  />
+                  <LookThumbImage look={look} className="h-full w-full object-contain" />
                 </div>
                 <p className="mt-2 text-center text-[11px] text-neutral-400">
                   {look.takenAt ? formatDateOnly(look.takenAt.toDate()) : ""}

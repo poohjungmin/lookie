@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
+import LookThumbImage from "@/components/LookThumbImage";
 
 export default function LooksPage() {
   const { looks, syncing } = useApp();
@@ -36,12 +37,7 @@ export default function LooksPage() {
         {looks.map((look) => (
           <Link key={look.id} href={`/looks/${look.id}`} className="block">
             <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={look.thumbSrc}
-                alt=""
-                className="h-full w-full object-contain"
-              />
+              <LookThumbImage look={look} className="h-full w-full object-contain" />
             </div>
             {look.takenAt && (
               <p className="mt-2 text-center text-[11px] text-neutral-400">

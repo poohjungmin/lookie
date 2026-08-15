@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useApp } from "@/lib/AppContext";
 import type { DisplayLook } from "@/lib/useLocalFirstLooks";
+import LookThumbImage from "@/components/LookThumbImage";
 
 const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -150,10 +151,8 @@ export default function HistoryPage() {
 
               {dayLooks && dayLooks[0] && (
                 <>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={dayLooks[0].thumbSrc}
-                    alt=""
+                  <LookThumbImage
+                    look={dayLooks[0]}
                     className="absolute inset-x-0 bottom-0 h-full w-full origin-bottom scale-[1.15] object-contain object-bottom"
                   />
                   {extraCount > 0 && (
@@ -185,12 +184,7 @@ export default function HistoryPage() {
                   href={`/looks/${look.id}`}
                   className="block aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={look.thumbSrc}
-                    alt=""
-                    className="h-full w-full object-contain"
-                  />
+                  <LookThumbImage look={look} className="h-full w-full object-contain" />
                 </Link>
               ))}
             </div>
