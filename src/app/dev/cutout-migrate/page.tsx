@@ -145,7 +145,32 @@ export default function CutoutMigratePage() {
   const [diagSteps, setDiagSteps] = useState<Record<DiagStepKey, DiagStepState> | null>(null);
   const [diagRunning, setDiagRunning] = useState(false);
 
+  // 촬영일 범위로 대상 좁히기 (선택) - "YYYY-MM-DD" 문자열, 비어있으면
+  // 제한 없음. 한꺼번에 몇백 장을 다 돌리기보다 특정 시기(예: 특정 장소를
+  // 자주 찍던 기간)만 먼저 검증하고 싶을 때 쓴다.
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+
   const pendingLooks = looks.filter((l) => (l.cutoutVersion ?? 0) < CURRENT_CUTOUT_VERSION);
+
+  function takenAtDateKey(look: (typeof looks)[number]): string | null {
+    if (!look.takenAt) return null;
+    const d = look.takenAt.toDate();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  // 날짜 범위가 하나라도 지정돼 있으면, 촬영일이 없는 룩은 범위를 판단할
+  // 수 없으므로 제외한다. 범위가 아예 없으면 기존과 동일하게 전체가 대상.
+  const dateFilteredLooks =
+    startDate || endDate
+      ? pendingLooks.filter((look) => {
+          const key = takenAtDateKey(look);
+          if (!key) return false;
+          if (startDate && key < startDate) return false;
+          if (endDate && key > endDate) return false;
+          return true;
+        })
+      : pendingLooks;
 
   function updateItem(id: string, patch: Partial<Item>) {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
@@ -161,7 +186,7 @@ export default function CutoutMigratePage() {
   // 전체를 돌리기 전에 한 장만으로 각 단계를 검증하는 진단 모드.
   // 요청된 10단계에 맞춰 하나씩 try/catch로 나누고, 실패한 단계에서 멈춘다.
   async function runDiagnosticOnFirst() {
-    const target = pendingLooks[0];
+    const target = dateFilteredLooks[0];
     if (!target || diagRunning) return;
 
     const initial = Object.fromEntries(
@@ -346,7 +371,7 @@ export default function CutoutMigratePage() {
   async function start() {
     setConfirmOpen(false);
     if (running) return;
-    const targets = pendingLooks;
+    const targets = dateFilteredLooks;
     if (targets.length === 0) return;
 
     setItems(targets.map((look) => ({ id: look.id, imageUrl: look.imageUrl, status: "pending" })));
@@ -458,8 +483,52 @@ export default function CutoutMigratePage() {
         </p>
       </header>
 
-      {/* 진단 모드 - 전체를 돌리기 전에 한 장으로 각 단계를 확인 */}
+      {/* 촬영일 범위로 대상 좁히기 - 한꺼번에 전체를 돌리기보다 특정 시기만
+          먼저 검증하고 싶을 때 쓴다. 비워두면 기존처럼 전체가 대상. */}
       <section className="rounded-2xl border border-neutral-200 p-4">
+        <p className="text-sm font-medium text-neutral-800">촬영일 범위로 좁히기 (선택)</p>
+        <p className="mt-1 text-xs text-neutral-500">
+          비워두면 재생성이 필요한 룩 전체({pendingLooks.length}개)가 대상이에요. 범위를 지정하면 촬영일
+          정보가 없는 룩은 대상에서 제외돼요.
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            max={endDate || undefined}
+            className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-700"
+            aria-label="시작일"
+          />
+          <span className="text-neutral-400">~</span>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            min={startDate || undefined}
+            className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-700"
+            aria-label="종료일"
+          />
+        </div>
+        {(startDate || endDate) && (
+          <div className="mt-2 flex items-center justify-between">
+            <p className="text-xs text-neutral-500">범위 내 대상: {dateFilteredLooks.length}개</p>
+            <button
+              type="button"
+              onClick={() => {
+                setStartDate("");
+                setEndDate("");
+              }}
+              className="text-xs text-neutral-400 underline underline-offset-2"
+            >
+              범위 초기화
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* 진단 모드 - 전체를 돌리기 전에 한 장으로 각 단계를 확인 */}
+      <section className="mt-4 rounded-2xl border border-neutral-200 p-4">
         <p className="text-sm font-medium text-neutral-800">1장 테스트 (진단 모드)</p>
         <p className="mt-1 text-xs text-neutral-500">
           대상 중 첫 번째 룩 하나만 10단계로 나눠 실행하고, 어느 단계에서
@@ -468,7 +537,7 @@ export default function CutoutMigratePage() {
         <button
           type="button"
           onClick={runDiagnosticOnFirst}
-          disabled={diagRunning || pendingLooks.length === 0}
+          disabled={diagRunning || dateFilteredLooks.length === 0}
           className="mt-3 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-40"
         >
           {diagRunning ? "진단 중…" : "1장 재생성 테스트"}
@@ -517,14 +586,14 @@ export default function CutoutMigratePage() {
       <button
         type="button"
         onClick={() => setConfirmOpen(true)}
-        disabled={running || pendingLooks.length === 0}
+        disabled={running || dateFilteredLooks.length === 0}
         className="mt-6 w-full rounded-2xl bg-neutral-900 py-4 text-center text-sm font-medium text-white disabled:bg-neutral-300"
       >
         {running
           ? `${processedCount} / ${items.length} 진행중…`
-          : pendingLooks.length === 0
+          : dateFilteredLooks.length === 0
           ? "재생성이 필요한 룩 없음"
-          : `🔄 누끼 다시 생성 (${pendingLooks.length}개)`}
+          : `🔄 누끼 다시 생성 (${dateFilteredLooks.length}개)`}
       </button>
 
       {finished && (
@@ -581,8 +650,11 @@ export default function CutoutMigratePage() {
               누끼를 다시 생성할까요?
             </p>
             <p className="mt-2 text-sm leading-relaxed text-neutral-500">
-              기존 룩의 누끼 이미지를 최신 알고리즘으로 다시 생성합니다.
-              원본 사진과 날짜·날씨 정보는 변경되지 않습니다.
+              {startDate || endDate
+                ? `촬영일 ${startDate || "처음"} ~ ${endDate || "마지막"} 범위의 룩 ${dateFilteredLooks.length}개만`
+                : "재생성이 필요한 룩 전체를"}{" "}
+              최신 알고리즘으로 다시 생성합니다. 원본 사진과 날짜·날씨 정보는
+              변경되지 않습니다.
             </p>
             <div className="mt-6 flex gap-3">
               <button
