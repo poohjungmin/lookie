@@ -15,6 +15,115 @@ import {
 } from "@/lib/lookStore";
 import { storage } from "@/lib/firebaseClient";
 
+/**
+ * fetch()/getBlob()이 둘 다 막혀도 <img> 태그로는 사진이 계속 잘 뜨는
+ * 상황이라면(이 앱 전체에서 실제로 그렇다), 광고/추적 차단기나 iOS 콘텐츠
+ * 차단기가 "이미지" 리소스 타입은 통과시키고 fetch/XHR 리소스 타입만
+ * 막는 흔한 패턴일 수 있다. crossOrigin="anonymous"로 이미지를 로드한 뒤
+ * 캔버스에 그려서 Blob으로 재구성하는 세 번째 경로로 이를 우회해본다.
+ * (서버가 Access-Control-Allow-Origin: *를 이미 보내는 걸 확인했으므로
+ * crossOrigin 이미지도 캔버스 판독이 오염되지 않아야 한다.)
+ */
+function loadImageAsBlob(url: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("캔버스 컨텍스트 생성 실패"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("캔버스 → Blob 변환 실패 (이미지가 CORS로 오염됐을 수 있음)"));
+        }, "image/jpeg", 0.95);
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    };
+    img.onerror = () => reject(new Error("이미지 로드 실패 (img onerror)"));
+    img.src = url;
+  });
+}
+
+type DownloadAttempt = { ok: true; blob: Blob; ms: number } | { ok: false; err: unknown };
+
+/**
+ * 원본을 세 가지 방식으로 동시에 시도한다: SDK getBlob(), 공개 URL fetch(),
+ * <img crossOrigin> + 캔버스. 어느 하나라도 성공하면 그 결과를 쓰고,
+ * 셋 다 실패하면 세 결과를 전부 담아 던진다 - 호출부는 이 note들을 그대로
+ * 화면에 보여주면 된다.
+ */
+async function downloadOriginalWithFallbacks(
+  uid: string,
+  lookId: string,
+  storagePath: string | null,
+  imageUrl: string
+): Promise<{ blob: Blob; source: string; notes: string[] }> {
+  const sdkStarted = performance.now();
+  const sdkAttempt: Promise<DownloadAttempt> = withTimeout(
+    downloadLookOriginal(uid, lookId, storagePath),
+    DOWNLOAD_TIMEOUT_MS,
+    "SDK getBlob"
+  ).then(
+    (blob) => ({ ok: true as const, blob, ms: Math.round(performance.now() - sdkStarted) }),
+    (err) => ({ ok: false as const, err })
+  );
+
+  const fetchStarted = performance.now();
+  const fetchAttempt: Promise<DownloadAttempt> = (async () => {
+    if (!imageUrl) return { ok: false as const, err: new Error("imageUrl 없음") };
+    try {
+      const res = await withTimeout(fetch(imageUrl), DOWNLOAD_TIMEOUT_MS, "공개 URL fetch");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      return { ok: true as const, blob, ms: Math.round(performance.now() - fetchStarted) };
+    } catch (err) {
+      return { ok: false as const, err };
+    }
+  })();
+
+  // 세 번째 경로: <img crossOrigin="anonymous"> + 캔버스. fetch/XHR 리소스
+  // 타입만 막고 image 타입은 통과시키는 차단기가 있다면 이 방식만 성공할
+  // 수 있다 (이 앱의 다른 모든 화면에서 <img>는 이미 잘 뜨고 있다).
+  const imgStarted = performance.now();
+  const imgAttempt: Promise<DownloadAttempt> = (async () => {
+    if (!imageUrl) return { ok: false as const, err: new Error("imageUrl 없음") };
+    try {
+      const blob = await withTimeout(loadImageAsBlob(imageUrl), DOWNLOAD_TIMEOUT_MS, "img 태그 로드");
+      return { ok: true as const, blob, ms: Math.round(performance.now() - imgStarted) };
+    } catch (err) {
+      return { ok: false as const, err };
+    }
+  })();
+
+  const [sdkResult, fetchResult, imgResult] = await Promise.all([sdkAttempt, fetchAttempt, imgAttempt]);
+
+  const noteOf = (label: string, r: DownloadAttempt) =>
+    r.ok
+      ? `${label}: 성공 (${r.ms}ms)`
+      : `${label}: 실패 - ${describeError("", r.err).name}: ${describeError("", r.err).message}`;
+  const notes = [
+    noteOf("SDK getBlob", sdkResult),
+    noteOf("공개 URL fetch", fetchResult),
+    noteOf("img 태그+캔버스", imgResult),
+  ];
+
+  if (sdkResult.ok) return { blob: sdkResult.blob, source: "SDK getBlob", notes };
+  if (fetchResult.ok) return { blob: fetchResult.blob, source: "공개 URL fetch", notes };
+  if (imgResult.ok) return { blob: imgResult.blob, source: "img 태그+캔버스", notes };
+
+  const combined = new Error(`원본 다운로드 3가지 방식 모두 실패:\n${notes.join("\n")}`);
+  combined.name = "AllDownloadMethodsFailed";
+  throw combined;
+}
+
 /** download URL(https://firebasestorage.googleapis.com/v0/b/{bucket}/o/...)에서 버킷 이름만 뽑아낸다. */
 function extractBucketFromUrl(url: string): string | null {
   const match = url.match(/\/b\/([^/]+)\/o\//);
@@ -223,57 +332,31 @@ export default function CutoutMigratePage() {
     });
 
     // 3. Storage 원본 다운로드 - 버킷은 일치하는 걸 확인했으니, 이번엔
-    // SDK getBlob()과 공개 download URL fetch()를 "동시에" 시도해서 같은
-    // 순간·같은 네트워크 조건에서 어느 쪽이 실제로 되는지 직접 비교한다.
+    // SDK getBlob() / 공개 download URL fetch() / <img>+캔버스 세 가지를
+    // "동시에" 시도해서 같은 순간·같은 네트워크 조건에서 어느 쪽이 실제로
+    // 되는지 직접 비교한다.
     updateDiagStep("download", { status: "running" });
-
-    const sdkStarted = performance.now();
-    const sdkAttempt: Promise<{ ok: true; blob: Blob; ms: number } | { ok: false; err: unknown }> =
-      withTimeout(downloadLookOriginal(user.uid, target.id, target.storagePath), DOWNLOAD_TIMEOUT_MS, "SDK getBlob").then(
-        (blob) => ({ ok: true as const, blob, ms: Math.round(performance.now() - sdkStarted) }),
-        (err) => ({ ok: false as const, err })
-      );
-
-    const fetchStarted = performance.now();
-    const fetchAttempt: Promise<{ ok: true; blob: Blob; ms: number } | { ok: false; err: unknown }> = (async () => {
-      if (!target.imageUrl) return { ok: false as const, err: new Error("imageUrl 없음") };
-      try {
-        const res = await withTimeout(fetch(target.imageUrl), DOWNLOAD_TIMEOUT_MS, "공개 URL fetch");
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        return { ok: true as const, blob, ms: Math.round(performance.now() - fetchStarted) };
-      } catch (err) {
-        return { ok: false as const, err };
-      }
-    })();
-
-    const [sdkResult, fetchResult] = await Promise.all([sdkAttempt, fetchAttempt]);
-
-    const sdkNote = sdkResult.ok
-      ? `SDK getBlob: 성공 (${sdkResult.ms}ms)`
-      : `SDK getBlob: 실패 - ${describeError("", sdkResult.err).name}: ${describeError("", sdkResult.err).message}`;
-    const fetchNote = fetchResult.ok
-      ? `공개 URL fetch: 성공 (${fetchResult.ms}ms)`
-      : `공개 URL fetch: 실패 - ${describeError("", fetchResult.err).name}: ${describeError("", fetchResult.err).message}`;
-
     let originalBlob: Blob;
-    if (sdkResult.ok) {
-      originalBlob = sdkResult.blob;
-    } else if (fetchResult.ok) {
-      originalBlob = fetchResult.blob;
-    } else {
+    try {
+      const dl = await downloadOriginalWithFallbacks(
+        user.uid,
+        target.id,
+        target.storagePath,
+        target.imageUrl
+      );
+      originalBlob = dl.blob;
+      updateDiagStep("download", {
+        status: "ok",
+        note: `${dl.notes.join("\n")}\n→ 이번엔 ${dl.source} 결과를 사용`,
+      });
+    } catch (err) {
       updateDiagStep("download", {
         status: "fail",
-        error: describeError("Storage 원본 다운로드 (SDK·fetch 둘 다 실패)", sdkResult.err, storagePath),
-        note: `${sdkNote}\n${fetchNote}`,
+        error: describeError("Storage 원본 다운로드 (세 방식 모두 실패)", err, storagePath),
       });
       setDiagRunning(false);
       return;
     }
-    updateDiagStep("download", {
-      status: "ok",
-      note: `${sdkNote}\n${fetchNote}\n→ 이번엔 ${sdkResult.ok ? "SDK" : "공개 URL fetch"} 결과를 사용`,
-    });
 
     // 4. Blob 생성 확인
     updateDiagStep("blob", { status: "running" });
@@ -406,10 +489,11 @@ export default function CutoutMigratePage() {
     for (const look of targets) {
       try {
         updateItem(look.id, { status: "running", currentStep: "Storage 원본 다운로드" });
-        const originalBlob = await withTimeout(
-          downloadLookOriginal(user.uid, look.id, look.storagePath),
-          DOWNLOAD_TIMEOUT_MS,
-          "Storage 원본 다운로드"
+        const { blob: originalBlob } = await downloadOriginalWithFallbacks(
+          user.uid,
+          look.id,
+          look.storagePath,
+          look.imageUrl
         );
         if (!originalBlob || originalBlob.size === 0) {
           throw new Error("다운로드된 Blob 크기가 0");
