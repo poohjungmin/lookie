@@ -18,6 +18,7 @@ import {
 import { generateThumbnail } from "@/lib/thumbnail";
 import { generateCutout, CURRENT_CUTOUT_VERSION } from "@/lib/cutout";
 import { cacheKeyOf, putCachedLook } from "@/lib/lookCache";
+import { getPersonalCorrectionProfile } from "@/lib/personalCropHeuristic";
 
 type WeatherStage = "no-date" | "no-gps" | "done" | "error";
 export type SaveStage =
@@ -115,8 +116,12 @@ export function useLookUpload(uid: string, onSaved: () => void) {
       // 사람 전체 누끼 생성 - 실패해도(모델 로드 실패, 메모리 부족 등) 룩
       // 저장 자체는 그대로 진행되고, 화면에는 원본/썸네일로 자연스럽게
       // 폴백된다. 나중에 /dev/cutout-migrate에서 다시 시도할 수 있다.
+      // personalCorrections는 세션당 한 번만 Firestore에서 읽고 캐시되므로
+      // (getPersonalCorrectionProfile 내부 캐시), 같은 배치의 여러 장을
+      // 동시에 처리해도 사진마다 추가 네트워크 호출이 생기지 않는다.
       updateItem(item.id, { saveStage: "generating-cutout" });
-      const cutout = await generateCutout(item.file);
+      const personalCorrections = await getPersonalCorrectionProfile(uid);
+      const cutout = await generateCutout(item.file, personalCorrections);
 
       let cutoutUrl: string | null = null;
       let cutoutStoragePath: string | null = null;
@@ -163,6 +168,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         cutoutThumbnailUrl,
         cutoutThumbnailStoragePath,
         cutoutVersion,
+        lastAutoCropRatio: cutout?.autoCrop?.bboxRatio ?? null,
         originalFileName: item.file.name,
         takenAt: meta.dateTimeOriginal ? Timestamp.fromDate(meta.dateTimeOriginal) : null,
         latitude: meta.latitude,
@@ -186,6 +192,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         cutoutUrl,
         cutoutThumbnailUrl,
         cutoutVersion,
+        lastAutoCropRatio: cutout?.autoCrop?.bboxRatio ?? null,
         takenAtMs: meta.dateTimeOriginal ? meta.dateTimeOriginal.getTime() : null,
         latitude: meta.latitude,
         longitude: meta.longitude,

@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebase/storage";
 import { db, storage } from "@/lib/firebaseClient";
+import type { CropRatioBox } from "@/lib/cropCorrectionMath";
 
 /** Firestore에 저장하는 날씨 상태 - UI의 세분화된 상태를 3가지로 단순화한다. */
 export type DbWeatherStatus = "success" | "missing_metadata" | "failed";
@@ -54,6 +55,15 @@ export type LookRecord = {
    * 룩만 골라 다시 생성한다.
    */
   cutoutVersion: number | null;
+  /**
+   * 가장 최근 "자동" 누끼 생성이 검출한 사람 bbox (원본 대비 0~1 비율).
+   * 사용자가 나중에 이 룩을 수동으로 다시 crop할 때 "자동으로 잡혔던
+   * 영역"의 비교 기준으로 쓴다 (personal crop correction heuristic).
+   * 수동 crop으로 재생성했을 때는 이 필드를 건드리지 않는다 - 수동 crop
+   * 입력은 이미 잘린 부분 이미지라 좌표계가 달라 비교 기준으로 쓸 수 없다.
+   * null이면 이전 버전에서 생성됐거나 사람을 못 찾은 룩.
+   */
+  lastAutoCropRatio: CropRatioBox | null;
   originalFileName: string;
 
   takenAt: Timestamp | null;
@@ -191,6 +201,12 @@ export async function updateLookCutoutFields(
     cutoutThumbnailUrl: string;
     cutoutThumbnailStoragePath: string;
     cutoutVersion: number;
+    /**
+     * 이번 생성이 "자동" 파이프라인일 때만 넘긴다 - 수동 crop 재생성
+     * (regenerateLookCutoutFromCrop)은 이 필드를 아예 생략해서 기존 값을
+     * 건드리지 않는다 (수동 crop 입력은 좌표계가 달라 비교 기준으로 못 씀).
+     */
+    lastAutoCropRatio?: CropRatioBox | null;
   }
 ): Promise<void> {
   await updateDoc(lookDocRef(uid, lookId), {
@@ -258,6 +274,7 @@ function normalizeLookDoc(id: string, raw: Partial<LookRecord>): SavedLook {
     cutoutThumbnailUrl: raw.cutoutThumbnailUrl ?? null,
     cutoutThumbnailStoragePath: raw.cutoutThumbnailStoragePath ?? null,
     cutoutVersion: raw.cutoutVersion ?? null,
+    lastAutoCropRatio: raw.lastAutoCropRatio ?? null,
     originalFileName: raw.originalFileName ?? "",
     takenAt: raw.takenAt ?? null,
     latitude: raw.latitude ?? null,

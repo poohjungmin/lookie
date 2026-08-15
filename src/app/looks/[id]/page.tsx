@@ -6,7 +6,8 @@ import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
 import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
-import ManualCutoutCropModal from "@/components/ManualCutoutCropModal";
+import { saveManualCropCorrection } from "@/lib/personalCropHeuristic";
+import ManualCutoutCropModal, { type ManualCropResult } from "@/components/ManualCutoutCropModal";
 
 export default function LookDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -67,12 +68,36 @@ export default function LookDetailPage() {
     }
   }
 
-  async function handleConfirmCrop(croppedBlob: Blob) {
+  async function handleConfirmCrop(result: ManualCropResult) {
     if (!look) return;
     setCropBusy(true);
     setCropError(null);
     try {
-      await regenerateLookCutoutFromCrop(user.uid, look.id, croppedBlob);
+      await regenerateLookCutoutFromCrop(user.uid, look.id, result.croppedBlob);
+
+      // "personal crop correction heuristic" 학습용 기록 - 자동으로 잡혔던
+      // 영역(lastAutoCropRatio, 최근 자동 생성 시점에 저장돼있음)과 방금
+      // 사용자가 최종 지정한 영역의 차이를 저장한다. 이전 버전에서 생성돼
+      // 자동 crop 기준이 없는 룩은(lastAutoCropRatio가 null) 비교 기준이
+      // 없으므로 기록을 남기지 않는다 - 누끼 재생성 자체는 이미 끝났으니
+      // 이 저장이 실패해도(오프라인 등) 사용자 경험에는 영향 없다.
+      if (look.lastAutoCropRatio) {
+        const manualCropRatio = {
+          x: result.manualCropPixels.x / result.naturalWidth,
+          y: result.manualCropPixels.y / result.naturalHeight,
+          width: result.manualCropPixels.width / result.naturalWidth,
+          height: result.manualCropPixels.height / result.naturalHeight,
+        };
+        saveManualCropCorrection(user.uid, look.id, {
+          originalImageWidth: result.naturalWidth,
+          originalImageHeight: result.naturalHeight,
+          autoCropRatio: look.lastAutoCropRatio,
+          manualCropRatio,
+        }).catch(() => {
+          // 개인화 기록 저장 실패는 조용히 무시 - 누끼 재생성은 이미 성공했다.
+        });
+      }
+
       // 목록 전체를 다시 훑지 않고 이 룩 하나만 즉시 최신 상태로 갱신한다 -
       // 홈/캘린더/전체 룩이 별도 새로고침 없이 바로 새 누끼를 보여준다.
       await refreshSingleLook(look.id);

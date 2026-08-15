@@ -15,6 +15,7 @@ import {
 import { storage } from "@/lib/firebaseClient";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import { withTimeout } from "@/lib/timeout";
+import { getPersonalCorrectionProfile } from "@/lib/personalCropHeuristic";
 
 /** download URL(https://firebasestorage.googleapis.com/v0/b/{bucket}/o/...)에서 버킷 이름만 뽑아낸다. */
 function extractBucketFromUrl(url: string): string | null {
@@ -239,8 +240,9 @@ export default function CutoutMigratePage() {
     updateDiagStep("cutout", { status: "running" });
     let diag;
     try {
+      const personalCorrections = await getPersonalCorrectionProfile(user.uid);
       diag = await withTimeout(
-        generateCutoutWithDiagnostics(originalBlob),
+        generateCutoutWithDiagnostics(originalBlob, personalCorrections),
         CUTOUT_TIMEOUT_MS,
         "누끼 모델 로드/세그멘테이션/정규화"
       );
@@ -322,6 +324,7 @@ export default function CutoutMigratePage() {
           cutoutThumbnailUrl,
           cutoutThumbnailStoragePath,
           cutoutVersion: CURRENT_CUTOUT_VERSION,
+          lastAutoCropRatio: diag.result.autoCrop?.bboxRatio ?? null,
         }),
         FIRESTORE_TIMEOUT_MS,
         "Firestore 업데이트"
@@ -351,6 +354,9 @@ export default function CutoutMigratePage() {
     setFinished(false);
     setRunning(true);
 
+    // 배치 전체에서 한 번만 읽는다 (내부 캐시) - 항목마다 다시 조회하지 않는다.
+    const personalCorrections = await getPersonalCorrectionProfile(user.uid);
+
     for (const look of targets) {
       try {
         updateItem(look.id, { status: "running", currentStep: "Storage 원본 다운로드" });
@@ -366,7 +372,7 @@ export default function CutoutMigratePage() {
 
         updateItem(look.id, { currentStep: "누끼 모델 로드/처리/정규화" });
         const diag = await withTimeout(
-          generateCutoutWithDiagnostics(originalBlob),
+          generateCutoutWithDiagnostics(originalBlob, personalCorrections),
           CUTOUT_TIMEOUT_MS,
           "누끼 모델 로드/세그멘테이션/정규화"
         );
@@ -400,6 +406,7 @@ export default function CutoutMigratePage() {
             cutoutThumbnailUrl: thumb.cutoutThumbnailUrl,
             cutoutThumbnailStoragePath: thumb.cutoutThumbnailStoragePath,
             cutoutVersion: CURRENT_CUTOUT_VERSION,
+            lastAutoCropRatio: diag.result.autoCrop?.bboxRatio ?? null,
           }),
           FIRESTORE_TIMEOUT_MS,
           "Firestore 업데이트"

@@ -13,6 +13,15 @@ type Rect = { x: number; y: number; w: number; h: number };
 type Bounds = { x0: number; y0: number; x1: number; y1: number };
 type HandleId = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
+export type ManualCropResult = {
+  croppedBlob: Blob;
+  /** 원본 이미지 픽셀 좌표계에서, 사용자가 최종 지정한 crop 영역. personal
+   * crop correction heuristic 기록(manualCrop)에 그대로 쓴다. */
+  manualCropPixels: { x: number; y: number; width: number; height: number };
+  naturalWidth: number;
+  naturalHeight: number;
+};
+
 const HANDLE_IDS: HandleId[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 function clamp(v: number, min: number, max: number): number {
@@ -104,7 +113,7 @@ export default function ManualCutoutCropModal({
   imageBlob: Blob;
   busy: boolean;
   onCancel: () => void;
-  onConfirm: (croppedBlob: Blob) => void;
+  onConfirm: (result: ManualCropResult) => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -355,7 +364,12 @@ export default function ManualCutoutCropModal({
           setError("이미지 자르기에 실패했어요");
           return;
         }
-        onConfirm(blob);
+        onConfirm({
+          croppedBlob: blob,
+          manualCropPixels: { x: cropX, y: cropY, width: cropW, height: cropH },
+          naturalWidth: naturalSize.w,
+          naturalHeight: naturalSize.h,
+        });
       },
       "image/jpeg",
       0.92

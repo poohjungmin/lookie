@@ -1,6 +1,7 @@
 "use client";
 
 import type { DbWeather, DbWeatherStatus } from "@/lib/lookStore";
+import type { CropRatioBox } from "@/lib/cropCorrectionMath";
 
 const DB_NAME = "lookie-cache";
 const DB_VERSION = 1;
@@ -25,6 +26,8 @@ export type CachedLook = {
   cutoutThumbnailUrl: string | null;
   /** /dev/cutout-migrate가 재생성 대상을 고르는 기준. */
   cutoutVersion: number | null;
+  /** 가장 최근 "자동" 누끼 생성이 검출한 사람 bbox (0~1 비율) - personal crop correction heuristic 비교 기준. */
+  lastAutoCropRatio: CropRatioBox | null;
   takenAtMs: number | null;
   latitude: number | null;
   longitude: number | null;

@@ -2,6 +2,12 @@
 
 import { removeBackground } from "@imgly/background-removal";
 import { downscaleImage } from "@/lib/downscaleImage";
+import {
+  computePersonalizedAutoCrop,
+  isAutoResultSuspicious,
+  type CropRatioBox,
+  type ManualCropCorrectionRecord,
+} from "@/lib/cropCorrectionMath";
 
 // /dev/cutout-compare 비교 결과 @imgly/background-removal(AGPL-3.0, ISNet
 // 기반)이 MediaPipe Selfie Segmenter보다 신발·머리카락·옷 경계 품질이
@@ -42,9 +48,19 @@ const MORPH_CLOSE_RADIUS = 1; // 아주 약한 closing(팽창→침식) - 손/�
 // 잘려나갔을 수 있는 경계(머리카락 끝, 손끝 등)를 보정하기 위한 여유분.
 const COMPONENT_WINDOW_MARGIN_RATIO = 0.06;
 
+/** 자동으로 검출된 사람 bbox(원본 대비 0~1 비율, personalization 보정 "전" 값)와
+ * 이번 실행에서 개인화 보정이 실제로 적용됐는지. manualCropCorrection 기록을
+ * 남길 때 "자동으로 잡혔던 영역" 비교 기준으로 쓴다. */
+export type AutoCropInfo = {
+  bboxRatio: CropRatioBox;
+  personalizationApplied: boolean;
+};
+
 export type CutoutResult = {
   detailBlob: Blob;
   thumbBlob: Blob;
+  /** 정규화가 사람을 못 찾아 실패했으면 null. */
+  autoCrop: AutoCropInfo | null;
 };
 
 type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
@@ -272,9 +288,17 @@ function selectBodyComponent(
  * 7) 머리~발 길이가 캔버스 높이의 95%를 차지하도록 스케일링한다
  *    → 같은 사람이 다른 거리/줌으로 찍혀도 화면상 크기가 비슷해 보인다.
  *
+ * 8) (선택) 자동 결과가 "의심스러울" 때만 - personalCorrections로 넘어온
+ *    이 사용자의 과거 수동 보정 기록을 참고해 bbox를 살짝 옮기고 크기를
+ *    조정한다("personal crop correction heuristic" - 모델 재학습이 아니라
+ *    순수 산술 보정). 정상적인 사진은 이 단계를 타지 않고 그대로 진행된다.
+ *
  * 사람 본체를 못 찾으면 null - 호출부는 정규화 없이 원본 누끼로 폴백한다.
  */
-async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
+async function normalizeCutout(
+  cutoutBlob: Blob,
+  personalCorrections?: ManualCropCorrectionRecord[]
+): Promise<{ blob: Blob; autoCrop: AutoCropInfo } | null> {
   try {
     const bitmap = await createImageBitmap(cutoutBlob);
     try {
@@ -324,20 +348,76 @@ async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
 
       const bboxWidth = bbox.maxX - bbox.minX + 1;
       const bboxHeight = bbox.maxY - bbox.minY + 1;
-      const padX = bboxWidth * CROP_PADDING_RATIO;
-      const padY = bboxHeight * CROP_PADDING_RATIO;
 
-      const cropMinX = Math.max(0, bbox.minX - padX);
-      const cropMinY = Math.max(0, bbox.minY - padY);
-      const cropMaxX = Math.min(bitmap.width, bbox.maxX + 1 + padX);
-      const cropMaxY = Math.min(bitmap.height, bbox.maxY + 1 + padY);
+      // 이 시점의 bitmap은 세그멘테이션 입력(원본을 종횡비 그대로 축소한
+      // 사본)과 같은 크기라, bbox를 0~1 비율로 표현하면 원본 좌표계와 완전히
+      // 동일한 값이 된다(균등 축소는 비율을 바꾸지 않는다) - 그래서 해상도
+      // 걱정 없이 이 비율을 그대로 manualCropCorrection 비교/저장에 쓸 수 있다.
+      const rawBBoxRatio: CropRatioBox = {
+        x: bbox.minX / bitmap.width,
+        y: bbox.minY / bitmap.height,
+        width: bboxWidth / bitmap.width,
+        height: bboxHeight / bitmap.height,
+      };
+      const imageIsPortrait = bitmap.height >= bitmap.width;
+
+      // 8) 자동 결과가 의심스러운지 먼저 판정한다 (padding 없는 원래 bbox
+      // 기준 - 아래에서 최종 계산할 때와 같은 스케일 공식을 재사용).
+      let effectiveBBoxRatio = rawBBoxRatio;
+      let personalizationApplied = false;
+      if (personalCorrections && personalCorrections.length > 0) {
+        const padX0 = bboxWidth * CROP_PADDING_RATIO;
+        const cropW0 =
+          Math.min(bitmap.width, bbox.maxX + 1 + padX0) - Math.max(0, bbox.minX - padX0);
+        let scale0 = (NORMALIZE_CANVAS_HEIGHT * BODY_HEIGHT_RATIO) / bboxHeight;
+        const widthConstrained0 = cropW0 * scale0 > NORMALIZE_CANVAS_WIDTH;
+        if (widthConstrained0) scale0 = NORMALIZE_CANVAS_WIDTH / cropW0;
+        const effectiveBodyHeightRatio0 = (bboxHeight * scale0) / NORMALIZE_CANVAS_HEIGHT;
+
+        const suspicious = isAutoResultSuspicious({
+          bboxRatio: rawBBoxRatio,
+          imageIsPortrait,
+          widthConstrained: widthConstrained0,
+          effectiveBodyHeightRatio: effectiveBodyHeightRatio0,
+          targetBodyHeightRatio: BODY_HEIGHT_RATIO,
+        });
+
+        if (suspicious) {
+          const corrected = computePersonalizedAutoCrop(rawBBoxRatio, imageIsPortrait, personalCorrections);
+          if (corrected) {
+            effectiveBBoxRatio = corrected;
+            personalizationApplied = true;
+          }
+        }
+      }
+
+      // 보정이 적용됐다면 비율을 다시 이 bitmap의 픽셀 bbox로 되돌린다 -
+      // 아래 padding/스케일/발 정렬 로직은 그대로 재사용한다.
+      const effectiveBBox: BoundingBox = personalizationApplied
+        ? {
+            minX: effectiveBBoxRatio.x * bitmap.width,
+            minY: effectiveBBoxRatio.y * bitmap.height,
+            maxX: (effectiveBBoxRatio.x + effectiveBBoxRatio.width) * bitmap.width - 1,
+            maxY: (effectiveBBoxRatio.y + effectiveBBoxRatio.height) * bitmap.height - 1,
+          }
+        : bbox;
+      const effectiveWidth = effectiveBBox.maxX - effectiveBBox.minX + 1;
+      const effectiveHeight = effectiveBBox.maxY - effectiveBBox.minY + 1;
+
+      const padX = effectiveWidth * CROP_PADDING_RATIO;
+      const padY = effectiveHeight * CROP_PADDING_RATIO;
+
+      const cropMinX = Math.max(0, effectiveBBox.minX - padX);
+      const cropMinY = Math.max(0, effectiveBBox.minY - padY);
+      const cropMaxX = Math.min(bitmap.width, effectiveBBox.maxX + 1 + padX);
+      const cropMaxY = Math.min(bitmap.height, effectiveBBox.maxY + 1 + padY);
       const cropWidth = cropMaxX - cropMinX;
       const cropHeight = cropMaxY - cropMinY;
       if (cropWidth <= 0 || cropHeight <= 0) return null;
 
       // 머리~발(padding 제외한 실제 bbox) 길이 기준으로 스케일을 정한다.
       // 사람이 캔버스보다 옆으로 넘치면 가로 기준으로 한 번 더 제한한다.
-      let scale = (NORMALIZE_CANVAS_HEIGHT * BODY_HEIGHT_RATIO) / bboxHeight;
+      let scale = (NORMALIZE_CANVAS_HEIGHT * BODY_HEIGHT_RATIO) / effectiveHeight;
       if (cropWidth * scale > NORMALIZE_CANVAS_WIDTH) {
         scale = NORMALIZE_CANVAS_WIDTH / cropWidth;
       }
@@ -348,7 +428,7 @@ async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
 
       // 발(bbox 하단)이 crop 좌표계에서 얼마나 아래에 있는지 구해서,
       // 캔버스 하단의 고정 위치에 오도록 세로 위치를 역산한다.
-      const footYInCrop = bbox.maxY + 1 - cropMinY;
+      const footYInCrop = effectiveBBox.maxY + 1 - cropMinY;
       const canvasFootY = NORMALIZE_CANVAS_HEIGHT * (1 - FOOT_BOTTOM_MARGIN_RATIO);
       const destY = canvasFootY - footYInCrop * scale;
 
@@ -370,9 +450,12 @@ async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
         destHeight
       );
 
-      return await new Promise<Blob | null>((resolve) => {
+      const blob = await new Promise<Blob | null>((resolve) => {
         outCanvas.toBlob((b) => resolve(b), "image/png");
       });
+      if (!blob) return null;
+
+      return { blob, autoCrop: { bboxRatio: rawBBoxRatio, personalizationApplied } };
     } finally {
       bitmap.close();
     }
@@ -420,7 +503,10 @@ async function resizeTransparent(
   }
 }
 
-async function runCutout(file: File | Blob): Promise<CutoutResult | null> {
+async function runCutout(
+  file: File | Blob,
+  personalCorrections?: ManualCropCorrectionRecord[]
+): Promise<CutoutResult | null> {
   try {
     const segmentInput = await downscaleImage(file, SEGMENT_INPUT_MAX_DIMENSION, 0.9);
     const rawCutout = await removeBackground(segmentInput, {
@@ -430,8 +516,8 @@ async function runCutout(file: File | Blob): Promise<CutoutResult | null> {
 
     // 정규화에 실패해도(본체 컴포넌트를 못 찾는 등) 누끼 자체는 살려서,
     // 사람 크기가 제각각이더라도 최소한 배경은 제거된 상태로 저장되게 한다.
-    const normalized = await normalizeCutout(rawCutout);
-    const baseForResize = normalized ?? rawCutout;
+    const normalized = await normalizeCutout(rawCutout, personalCorrections);
+    const baseForResize = normalized?.blob ?? rawCutout;
 
     const [detailBlob, thumbBlob] = await Promise.all([
       resizeTransparent(baseForResize, DETAIL_MAX_DIMENSION, DETAIL_QUALITY),
@@ -439,7 +525,7 @@ async function runCutout(file: File | Blob): Promise<CutoutResult | null> {
     ]);
 
     if (!detailBlob || !thumbBlob) return null;
-    return { detailBlob, thumbBlob };
+    return { detailBlob, thumbBlob, autoCrop: normalized?.autoCrop ?? null };
   } catch {
     return null;
   }
@@ -470,9 +556,19 @@ function enqueueCutoutTask<T>(task: () => Promise<T>): Promise<T> {
  * 실행하고, 두 사이즈는 정규화된 결과를 캔버스로 리사이즈만 하므로 빠르다.
  * 실패하면(모델 로드 실패, 메모리 부족 등) null - 호출부는 원본으로 폴백해야 한다.
  * 앱 전체에서 동시에 최대 1건만 실행되도록 직렬화되어 있다.
+ *
+ * personalCorrections를 넘기면, 자동 결과가 "의심스러울" 때만(정상 사진은
+ * 영향 없음) 이 사용자의 과거 수동 보정 기록을 참고해 bbox를 살짝 조정한다
+ * ("personal crop correction heuristic" - 모델 재학습 아님). 이미 메모리에
+ * 있는 배열을 넘기는 것뿐이라 추가 네트워크 호출이나 유의미한 처리 시간
+ * 증가가 없다 - Firestore 조회는 호출부(useLookUpload 등)가 세션당 한 번만
+ * 캐시해서 수행한다(personalCropHeuristic.ts).
  */
-export function generateCutout(file: File | Blob): Promise<CutoutResult | null> {
-  return enqueueCutoutTask(() => runCutout(file));
+export function generateCutout(
+  file: File | Blob,
+  personalCorrections?: ManualCropCorrectionRecord[]
+): Promise<CutoutResult | null> {
+  return enqueueCutoutTask(() => runCutout(file, personalCorrections));
 }
 
 // --- 진단 전용 -------------------------------------------------------------
@@ -489,7 +585,10 @@ export type CutoutDiagnosticResult =
       lastProgressPhase: string | null;
     };
 
-async function runCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagnosticResult> {
+async function runCutoutWithDiagnostics(
+  file: File | Blob,
+  personalCorrections?: ManualCropCorrectionRecord[]
+): Promise<CutoutDiagnosticResult> {
   let lastProgressPhase: string | null = null;
 
   let rawCutout: Blob;
@@ -507,8 +606,8 @@ async function runCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagno
   }
 
   try {
-    const normalized = await normalizeCutout(rawCutout);
-    const baseForResize = normalized ?? rawCutout;
+    const normalized = await normalizeCutout(rawCutout, personalCorrections);
+    const baseForResize = normalized?.blob ?? rawCutout;
 
     const [detailBlob, thumbBlob] = await Promise.all([
       resizeTransparent(baseForResize, DETAIL_MAX_DIMENSION, DETAIL_QUALITY),
@@ -526,7 +625,7 @@ async function runCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagno
 
     return {
       ok: true,
-      result: { detailBlob, thumbBlob },
+      result: { detailBlob, thumbBlob, autoCrop: normalized?.autoCrop ?? null },
       usedNormalization: normalized !== null,
     };
   } catch (error) {
@@ -539,6 +638,9 @@ async function runCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagno
  * 왜 실패했는지 그대로 돌려준다. /dev/cutout-migrate의 단계별 진단 UI 전용 -
  * 일반 업로드 경로(useLookUpload.ts)는 계속 generateCutout(폴백 우선)을 쓴다.
  */
-export function generateCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagnosticResult> {
-  return enqueueCutoutTask(() => runCutoutWithDiagnostics(file));
+export function generateCutoutWithDiagnostics(
+  file: File | Blob,
+  personalCorrections?: ManualCropCorrectionRecord[]
+): Promise<CutoutDiagnosticResult> {
+  return enqueueCutoutTask(() => runCutoutWithDiagnostics(file, personalCorrections));
 }
