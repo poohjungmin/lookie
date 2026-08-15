@@ -55,34 +55,37 @@ export function dateProximityDays(a: Date, b: Date): number {
 }
 
 /**
- * 오늘 날씨 vs 과거 룩 하나의 유사도(0~1, 높을수록 유사)를 계산한다.
+ * 기준 날씨(targetWeather) vs 과거 룩 하나의 유사도(0~1, 높을수록 유사)를
+ * 계산한다. targetWeather/targetDate는 "오늘"에 고정되지 않는다 - 홈
+ * 화면의 날씨 예보 카드를 오늘/내일/그 이후로 넘길 때마다 그 날짜의
+ * 예보 weather를 그대로 넣어 재사용한다(rankLooksByWeatherSimilarity 참고).
  * 풍속은 절대 쓰지 않는다. 구성요소 중 데이터가 없는 항목은 그 항목만
  * 빼고 나머지 가중치로 재정규화한다 - tempMax가 없는 옛날 룩도 나머지
  * 요소만으로 합리적인 점수를 받는다. 내부 랭킹 전용 - 사용자에게는
  * 숫자를 노출하지 않는다.
  */
 export function computeWeatherSimilarity(
-  today: TodayWeather,
-  todayDate: Date,
+  targetWeather: TodayWeather,
+  targetDate: Date,
   lookWeather: DbWeather,
   lookDate: Date
 ): number {
   const components: Array<[number, number | null]> = [
-    [TEMP_MEAN_WEIGHT, tempDiffScore(today.tempMean, lookWeather.tempMean)],
-    [TEMP_MAX_WEIGHT, tempDiffScore(today.tempMax, lookWeather.tempMax)],
-    [TEMP_MIN_WEIGHT, tempDiffScore(today.tempMin, lookWeather.tempMin)],
+    [TEMP_MEAN_WEIGHT, tempDiffScore(targetWeather.tempMean, lookWeather.tempMean)],
+    [TEMP_MAX_WEIGHT, tempDiffScore(targetWeather.tempMax, lookWeather.tempMax)],
+    [TEMP_MIN_WEIGHT, tempDiffScore(targetWeather.tempMin, lookWeather.tempMin)],
     [
       RAIN_WEIGHT,
-      isRainyWeather(today.precipitationSum, today.weatherCode) ===
+      isRainyWeather(targetWeather.precipitationSum, targetWeather.weatherCode) ===
       isRainyWeather(lookWeather.precipitation, lookWeather.weatherCode)
         ? 1
         : 0,
     ],
     [
       WEATHER_CODE_WEIGHT,
-      weatherGroupOf(today.weatherCode) === weatherGroupOf(lookWeather.weatherCode) ? 1 : 0,
+      weatherGroupOf(targetWeather.weatherCode) === weatherGroupOf(lookWeather.weatherCode) ? 1 : 0,
     ],
-    [SEASON_WEIGHT, gaussianScore(dateProximityDays(todayDate, lookDate), SEASON_SIGMA_DAYS)],
+    [SEASON_WEIGHT, gaussianScore(dateProximityDays(targetDate, lookDate), SEASON_SIGMA_DAYS)],
   ];
 
   let weightedSum = 0;
@@ -104,20 +107,23 @@ function hasUsableWeather(
 }
 
 /**
- * 오늘과 날씨가 비슷했던 과거 룩 상위 N개. weather 데이터가 없는 룩은
- * 애초에 계산 대상에서 제외한다. looks가 1,000개 이상이어도 각 항목이
- * 몇 번의 산술 연산뿐이라 O(n) 스캔 + 정렬로 충분히 가볍다.
+ * 기준 날씨(targetWeather/targetDate)와 비슷했던 과거 룩 상위 N개.
+ * targetWeather는 오늘 날씨든, 홈에서 선택된 내일/이후 예보든 상관없이
+ * 같은 모양(TodayWeather)이면 그대로 넣을 수 있다 - 이 함수 자체는
+ * "오늘"에 종속돼 있지 않다. weather 데이터가 없는 룩은 애초에 계산
+ * 대상에서 제외한다. looks가 1,000개 이상이어도 각 항목이 몇 번의 산술
+ * 연산뿐이라 O(n) 스캔 + 정렬로 충분히 가볍다.
  */
 export function rankLooksByWeatherSimilarity(
   looks: DisplayLook[],
-  today: TodayWeather,
-  todayDate: Date,
+  targetWeather: TodayWeather,
+  targetDate: Date,
   limit: number
 ): DisplayLook[] {
   const scored: Array<{ look: DisplayLook; score: number }> = [];
   for (const look of looks) {
     if (!hasUsableWeather(look)) continue;
-    const score = computeWeatherSimilarity(today, todayDate, look.weather, look.takenAt.toDate());
+    const score = computeWeatherSimilarity(targetWeather, targetDate, look.weather, look.takenAt.toDate());
     scored.push({ look, score });
   }
   scored.sort((a, b) => b.score - a.score);

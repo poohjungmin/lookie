@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useApp } from "@/lib/AppContext";
-import { useTodayWeather } from "@/lib/useTodayWeather";
+import { useWeeklyForecast } from "@/lib/useWeeklyForecast";
 import { rankLooksByWeatherSimilarity, findLooksNearThisDate } from "@/lib/weatherSimilarity";
 import RecommendedLookCard from "@/components/RecommendedLookCard";
+import WeeklyForecastCarousel from "@/components/WeeklyForecastCarousel";
+import type { ForecastDay } from "@/lib/currentWeather";
 
 const SIMILAR_LOOKS_LIMIT = 5;
 const NEARBY_DATE_LOOKS_LIMIT = 6;
@@ -18,28 +20,52 @@ function todayKorean(): string {
   });
 }
 
+function parseForecastDate(dateStr: string): Date {
+  // "YYYY-MM-DD"를 그대로 new Date()에 넣으면 UTC 자정으로 해석돼 시간대에
+  // 따라 하루 밀릴 수 있어, 로컬 자정으로 명시해서 파싱한다.
+  return new Date(`${dateStr}T00:00:00`);
+}
+
+/** 선택된 예보 날짜에 맞춰 추천 섹션 제목을 자연스러운 문구로 바꾼다. */
+function recommendationTitle(day: ForecastDay, index: number): string {
+  if (index === 0) return "오늘과 비슷한 날씨에 입었던 룩";
+  if (index === 1) return "내일 날씨에 입기 좋았던 룩";
+  const date = parseForecastDate(day.date);
+  return `${date.getMonth() + 1}월 ${date.getDate()}일 날씨와 비슷했던 룩`;
+}
+
 export default function HomePage() {
   const { looks, syncing, signOutUser } = useApp();
   const {
-    weather: todayWeather,
+    days: forecastDays,
     loading: weatherLoading,
     errorReason: weatherErrorReason,
     usingCachedLocation,
+    usingSeoulFallback,
     retry: retryWeather,
-  } = useTodayWeather();
+  } = useWeeklyForecast();
 
-  // 홈 화면이 떠 있는 동안은 "오늘"을 고정한다 - 자정을 넘겨도 화면이 알아서
-  // 안 바뀌는 정도는 감수하고, 매 렌더마다 새 Date를 만들어 추천 계산이
-  // 다시 도는 것을 막는다.
+  // 홈 상단 날씨 카드에서 지금 스와이프되어 화면 중심에 있는 날짜의
+  // index(0=오늘). 처음 진입하면 항상 오늘이 기본값이다. 예보 자체는
+  // useWeeklyForecast가 이미 한 번에 받아온 배열을 그대로 쓰므로, 날짜를
+  // 넘겨도 Open-Meteo를 다시 부르지 않는다.
+  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  const selectedDay = forecastDays[selectedDayIndex] ?? null;
+
+  // 홈 화면이 떠 있는 동안은 "실제 오늘"을 고정한다 - "이맘때 입었던 룩"은
+  // 혼란을 줄이기 위해 항상 이 실제 오늘 기준으로 유지하고, 예보 카드를
+  // 넘겨도 바뀌지 않는다(날씨 기반 추천만 선택된 날짜를 따라간다).
   const today = useMemo(() => new Date(), []);
 
   // looks는 이미 local-first로 로드되어 있는 배열 그대로 - 추천 때문에
   // Firestore를 다시 조회하지 않는다. 각 항목이 산술 연산 몇 개뿐이라
-  // 룩이 1,000개 이상이어도 이 계산 자체는 무시할 만한 비용이다.
+  // 룩이 1,000개 이상이어도 이 계산 자체는 무시할 만한 비용이고, 선택된
+  // 날짜가 바뀔 때만 다시 계산된다(useMemo).
   const similarLooks = useMemo(() => {
-    if (!todayWeather) return [];
-    return rankLooksByWeatherSimilarity(looks, todayWeather, today, SIMILAR_LOOKS_LIMIT);
-  }, [looks, todayWeather, today]);
+    if (!selectedDay) return [];
+    const targetDate = selectedDayIndex === 0 ? today : parseForecastDate(selectedDay.date);
+    return rankLooksByWeatherSimilarity(looks, selectedDay, targetDate, SIMILAR_LOOKS_LIMIT);
+  }, [looks, selectedDay, selectedDayIndex, today]);
 
   const nearbyDateLooks = useMemo(() => {
     const excludeIds = new Set(similarLooks.map((l) => l.id));
@@ -75,57 +101,27 @@ export default function HomePage() {
         </button>
       </header>
 
-      {/* 현재 날씨 - 위치 권한이 없거나 조회에 실패해도 화면의 나머지
-          부분(룩 목록/추천)은 그대로 동작한다. */}
-      <section className="rounded-3xl bg-neutral-50 px-6 py-9 text-center">
-        <p className="text-xs text-neutral-400">현재 날씨</p>
-        {weatherLoading ? (
-          <p className="mt-4 text-sm text-neutral-300">날씨 불러오는 중…</p>
-        ) : todayWeather ? (
-          <div className="mt-3">
-            <p className="text-3xl font-semibold text-neutral-900">
-              {todayWeather.currentTemp !== null ? `${Math.round(todayWeather.currentTemp)}°` : "-"}
-            </p>
-            <p className="mt-1.5 text-sm text-neutral-500">
-              {todayWeather.weatherLabel}
-              {" · 최고 "}
-              {todayWeather.tempMax !== null ? `${Math.round(todayWeather.tempMax)}°` : "-"}
-              {" · 최저 "}
-              {todayWeather.tempMin !== null ? `${Math.round(todayWeather.tempMin)}°` : "-"}
-            </p>
-            {todayWeather.precipitationProbability !== null && (
-              <p className="mt-1 text-xs text-neutral-400">
-                강수확률 {Math.round(todayWeather.precipitationProbability)}%
-              </p>
-            )}
-            {usingCachedLocation && (
-              <p className="mt-1.5 text-[11px] text-neutral-300">최근 위치 기준</p>
-            )}
-          </div>
-        ) : (
-          <div className="mt-3">
-            <p className="text-sm text-neutral-300">
-              {weatherErrorReason === "denied"
-                ? "위치 권한이 없어 날씨를 가져올 수 없어요"
-                : "날씨를 가져오지 못했어요"}
-            </p>
-            <button
-              type="button"
-              onClick={retryWeather}
-              className="mt-2 text-xs text-neutral-400 underline underline-offset-2"
-            >
-              다시 시도
-            </button>
-          </div>
-        )}
-      </section>
+      {/* 이번 주 날씨 - 위치 권한이 없거나 조회에 실패해도 화면의 나머지
+          부분(룩 목록/추천)은 그대로 동작한다. 좌우로 넘기면 아래 추천이
+          같이 바뀐다. */}
+      <WeeklyForecastCarousel
+        days={forecastDays}
+        loading={weatherLoading}
+        errorReason={weatherErrorReason}
+        usingCachedLocation={usingCachedLocation}
+        usingSeoulFallback={usingSeoulFallback}
+        onRetry={retryWeather}
+        selectedIndex={selectedDayIndex}
+        onSelectIndex={setSelectedDayIndex}
+      />
 
-      {/* 오늘과 비슷한 날씨에 입었던 룩 - 룩기의 핵심 화면. 새 코디를
-          생성하는 게 아니라 실제로 입었던 룩을 다시 보여준다. */}
-      {similarLooks.length > 0 && (
+      {/* 날씨 기반 추천 - 룩기의 핵심 화면. 새 코디를 생성하는 게 아니라
+          실제로 입었던 룩을 다시 보여준다. 제목/후보 모두 위에서 선택된
+          예보 날짜를 따라간다. */}
+      {selectedDay && similarLooks.length > 0 && (
         <section className="mt-10">
           <h2 className="text-sm font-medium text-neutral-800">
-            오늘과 비슷한 날씨에 입었던 룩
+            {recommendationTitle(selectedDay, selectedDayIndex)}
           </h2>
           <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
             {similarLooks.map((look) => (
@@ -135,10 +131,10 @@ export default function HomePage() {
         </section>
       )}
 
-      {todayWeather && hasAnyWeatherTaggedLook && similarLooks.length === 0 && (
+      {selectedDay && hasAnyWeatherTaggedLook && similarLooks.length === 0 && (
         <section className="mt-10">
           <h2 className="text-sm font-medium text-neutral-800">
-            오늘과 비슷한 날씨에 입었던 룩
+            {recommendationTitle(selectedDay, selectedDayIndex)}
           </h2>
           <p className="mt-3 text-xs text-neutral-300">
             아직 이 날씨와 비슷한 기록이 없어요
@@ -146,7 +142,8 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* 이맘때 입었던 룩 - 데이터가 있을 때만 노출, 위 섹션과 중복되지 않는다. */}
+      {/* 이맘때 입었던 룩 - 데이터가 있을 때만 노출, 위 섹션과 중복되지
+          않는다. 예보 카드를 넘겨도 바뀌지 않고 항상 실제 오늘 기준이다. */}
       {nearbyDateLooks.length > 0 && (
         <section className="mt-10">
           <h2 className="text-sm font-medium text-neutral-800">

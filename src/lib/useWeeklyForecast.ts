@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchTodayWeather, type TodayWeather } from "@/lib/currentWeather";
+import { fetchWeeklyForecast, type ForecastDay } from "@/lib/currentWeather";
+import { DEFAULT_WEATHER_LOCATION } from "@/lib/weather";
 
 // 마지막으로 성공한 위치를 localStorage에만 저장한다 (Firestore에는 절대
 // 저장하지 않는다 - 요구사항). 너무 오래된 위치는 오늘 날씨와 안 맞을 수
@@ -49,26 +50,32 @@ function getCurrentPosition(): Promise<Coords> {
 
 export type TodayWeatherErrorReason = "denied" | "unavailable" | "fetch-failed";
 
-export type TodayWeatherState = {
-  weather: TodayWeather | null;
+export type WeeklyForecastState = {
+  /** 오늘 포함 최대 7일, 로딩 전/실패 시에는 빈 배열. */
+  days: ForecastDay[];
   loading: boolean;
   errorReason: TodayWeatherErrorReason | null;
   /** 실시간 위치 조회가 실패해서 최근 저장해둔 위치로 대신 조회했는지. */
   usingCachedLocation: boolean;
+  /** 위치를 전혀 못 구해(권한 거부 등) 서울을 기본 위치로 썼는지. */
+  usingSeoulFallback: boolean;
   retry: () => void;
 };
 
 /**
- * 브라우저 Geolocation -> Open-Meteo 오늘 날씨.
- * 위치 권한 거부/조회 실패 시 최근 성공했던 위치(로컬 전용)로 폴백하고,
- * 그마저 없으면 조용히 실패 상태만 남긴다 - 이 훅의 실패가 홈 화면의
- * 다른 기능(룩 목록 등)을 절대 막지 않는다.
+ * 브라우저 Geolocation -> Open-Meteo 주간 예보(오늘 포함 7일)를 한 번만
+ * 불러온다. 위치 권한 거부/조회 실패 시 최근 성공했던 위치(로컬 전용)로
+ * 폴백하고, 그마저 없으면 과거 날씨 조회와 같은 정책으로 서울을 기본
+ * 위치로 써서 예보 자체는 계속 보여준다 - 위치 권한 때문에 홈 화면(날씨
+ * 카드 + 추천)이 완전히 막히는 일이 없게 하기 위함이다. 날짜를 넘길 때마다
+ * 다시 조회하지 않도록, 7일치를 한 번에 받아 이 상태에 그대로 들고 있는다.
  */
-export function useTodayWeather(): TodayWeatherState {
-  const [weather, setWeather] = useState<TodayWeather | null>(null);
+export function useWeeklyForecast(): WeeklyForecastState {
+  const [days, setDays] = useState<ForecastDay[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorReason, setErrorReason] = useState<TodayWeatherErrorReason | null>(null);
   const [usingCachedLocation, setUsingCachedLocation] = useState(false);
+  const [usingSeoulFallback, setUsingSeoulFallback] = useState(false);
   // 재시도 도중 새 재시도가 또 들어와도, 먼저 시작된 낡은 요청이 나중에
   // 끝나면서 최신 상태를 덮어쓰지 않도록 순번으로 구분한다.
   const attemptRef = useRef(0);
@@ -78,8 +85,9 @@ export function useTodayWeather(): TodayWeatherState {
     setLoading(true);
     setErrorReason(null);
 
-    let coords: Coords | null = null;
+    let coords: Coords;
     let fromCache = false;
+    let fromSeoulFallback = false;
     try {
       coords = await getCurrentPosition();
       writeCachedLocation(coords);
@@ -89,21 +97,22 @@ export function useTodayWeather(): TodayWeatherState {
         coords = cached;
         fromCache = true;
       } else {
-        if (attemptRef.current !== myAttempt) return;
-        const code = (err as { code?: number } | null)?.code;
-        setErrorReason(code === 1 ? "denied" : "unavailable");
-        setLoading(false);
-        return;
+        // 위치를 전혀 못 구해도 예보 자체는 서울 기준으로 보여준다 - 과거
+        // 사진 날씨 조회(weather.ts resolveWeatherLocation)와 같은 정책.
+        coords = { lat: DEFAULT_WEATHER_LOCATION.latitude, lon: DEFAULT_WEATHER_LOCATION.longitude };
+        fromSeoulFallback = true;
+        void err; // 위치 조회 실패 사유 자체는 UI에 노출하지 않는다 (서울로 대체되므로).
       }
     }
 
     if (attemptRef.current !== myAttempt) return;
     setUsingCachedLocation(fromCache);
+    setUsingSeoulFallback(fromSeoulFallback);
 
     try {
-      const result = await fetchTodayWeather(coords.lat, coords.lon);
+      const result = await fetchWeeklyForecast(coords.lat, coords.lon);
       if (attemptRef.current !== myAttempt) return;
-      setWeather(result);
+      setDays(result.days);
     } catch {
       if (attemptRef.current !== myAttempt) return;
       setErrorReason("fetch-failed");
@@ -114,10 +123,10 @@ export function useTodayWeather(): TodayWeatherState {
 
   useEffect(() => {
     /* eslint-disable-next-line react-hooks/set-state-in-effect -- 훅이 마운트되면
-       곧바로 위치 조회 + 오늘 날씨 조회를 시작하는 의도적인 데이터 페칭
+       곧바로 위치 조회 + 주간 예보 조회를 시작하는 의도적인 데이터 페칭
        (useLocalFirstLooks.ts의 syncNow 호출과 동일한 패턴). */
     run();
   }, [run]);
 
-  return { weather, loading, errorReason, usingCachedLocation, retry: run };
+  return { days, loading, errorReason, usingCachedLocation, usingSeoulFallback, retry: run };
 }
