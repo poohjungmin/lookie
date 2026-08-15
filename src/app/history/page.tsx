@@ -179,12 +179,22 @@ export default function HistoryPage() {
           ) : (
             <div className="mt-4 grid grid-cols-2 gap-4">
               {selectedLooks.map((look) => (
-                <Link
-                  key={look.id}
-                  href={`/looks/${look.id}`}
-                  className="block aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50"
-                >
-                  <LookThumbImage look={look} className="h-full w-full object-contain" />
+                <Link key={look.id} href={`/looks/${look.id}`} className="block">
+                  <div className="aspect-[3/4] overflow-hidden rounded-2xl bg-neutral-50">
+                    <LookThumbImage look={look} className="h-full w-full object-contain" />
+                  </div>
+                  <p className="mt-2 text-center text-[11px] text-neutral-500">
+                    {look.weatherStatus === "success" && look.weather
+                      ? [
+                          look.weather.weatherLabel,
+                          look.weather.tempMax !== null && look.weather.tempMin !== null
+                            ? `최고 ${look.weather.tempMax.toFixed(1)}℃ · 최저 ${look.weather.tempMin.toFixed(1)}℃`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "날씨 정보 없음"}
+                  </p>
                 </Link>
               ))}
             </div>

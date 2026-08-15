@@ -149,6 +149,22 @@ export default function LookDetailPage() {
           <p className="mt-1 text-xs text-neutral-400">
             사람이 이상하게 잘렸거나 배경이 안 지워졌다면 다시 생성해보세요.
           </p>
+
+          {look.cutoutUrl ?? look.cutoutThumbnailUrl ? (
+            <div className="mt-3 aspect-[3/4] overflow-hidden rounded-xl bg-neutral-50">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={look.cutoutUrl ?? look.cutoutThumbnailUrl ?? undefined}
+                alt=""
+                className="h-full w-full object-contain"
+              />
+            </div>
+          ) : (
+            <p className="mt-3 rounded-xl bg-neutral-50 py-8 text-center text-xs text-neutral-300">
+              아직 누끼가 없어요
+            </p>
+          )}
+
           <button
             type="button"
             onClick={handleRegenerateCutout}

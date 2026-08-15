@@ -109,7 +109,10 @@ export default function BottomNav() {
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-20 border-t border-neutral-100 bg-white/95 backdrop-blur"
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      // safe-area-inset만으로는 홈 인디케이터에 너무 바짝 붙어 보여서
+      // 여유 공간을 조금 더 얹는다 (layout.tsx의 viewport-fit: cover와
+      // 함께 있어야 env() 값이 0이 아닌 실제 인셋으로 계산된다).
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
     >
       <div className="mx-auto flex max-w-2xl items-center justify-around">
         <NavLink href="/" label="홈" active={pathname === "/"}>
