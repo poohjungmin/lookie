@@ -27,7 +27,7 @@ const THUMB_QUALITY = 0.75;
 // 세그멘테이션 모델에 원본(12MP+)을 그대로 넣으면 iPhone Safari가 메모리
 // 부족으로 탭을 강제 종료시키는 문제가 비교 단계에서 실측되었다 - 추론
 // 전에 먼저 1024px로 줄인 사본을 사용한다.
-const SEGMENT_INPUT_MAX_DIMENSION = 1024;
+export const SEGMENT_INPUT_MAX_DIMENSION = 1024;
 
 // 이 번호를 올리면 /dev/cutout-migrate가 "재생성 필요"로 판단한다.
 // 기존에 저장된 누끼(또는 cutoutVersion이 아예 없는 룩)는 이 값보다
@@ -38,23 +38,26 @@ export const CURRENT_CUTOUT_VERSION = 2;
 // 정규화는 이 내부 작업용 캔버스(2:3 세로 비율) 위에서 한 번 수행하고,
 // 상세/썸네일은 이 결과를 그대로 리사이즈만 한다 - 그래서 두 사이즈의
 // 사람 비율·정렬이 항상 똑같다.
-const NORMALIZE_CANVAS_WIDTH = 1024;
-const NORMALIZE_CANVAS_HEIGHT = 1536;
-const CROP_PADDING_RATIO = 0.04; // bounding box 상하좌우 4% 여백 (최소화)
-const BODY_HEIGHT_RATIO = 0.95; // 머리~발이 캔버스 높이의 95%를 차지하도록 스케일
-const FOOT_BOTTOM_MARGIN_RATIO = 0.025; // 발이 캔버스 하단에서 2.5% 위 고정 위치
-const ALPHA_THRESHOLD = 10; // 이보다 낮은 알파는 노이즈로 보고 "사람"에서 제외
+// export: /dev/mask-cleanup-test가 "기존 방식"을 완전히 동일하게 재현하기
+// 위해 그대로 재사용한다 (읽기 전용 재사용 - 이 export 추가 자체는 아래
+// 로직/값을 전혀 바꾸지 않는다).
+export const NORMALIZE_CANVAS_WIDTH = 1024;
+export const NORMALIZE_CANVAS_HEIGHT = 1536;
+export const CROP_PADDING_RATIO = 0.04; // bounding box 상하좌우 4% 여백 (최소화)
+export const BODY_HEIGHT_RATIO = 0.95; // 머리~발이 캔버스 높이의 95%를 차지하도록 스케일
+export const FOOT_BOTTOM_MARGIN_RATIO = 0.025; // 발이 캔버스 하단에서 2.5% 위 고정 위치
+export const ALPHA_THRESHOLD = 10; // 이보다 낮은 알파는 노이즈로 보고 "사람"에서 제외
 
 // person 컴포넌트를 고를 때 쓰는, 저해상도 연결영역 분석용 설정.
 // 다운샘플로 충분히 빠르면서도 거울 난간/스트랩 같은 가늘고 긴 잔여물과
 // 사람 본체를 구분할 수 있는 해상도.
-const COMPONENT_ANALYSIS_MAX_DIM = 256;
-const MIN_COMPONENT_AREA_RATIO = 0.005; // 분석 캔버스 전체 픽셀의 0.5% 미만은 잡음으로 간주
-const THIN_ASPECT_RATIO = 0.12; // min(w,h)/max(w,h)가 이보다 작으면 "가늘고 긴" 형태(난간 등)로 간주
-const MORPH_CLOSE_RADIUS = 1; // 아주 약한 closing(팽창→침식) - 손/팔 사이 작은 틈을 이어붙임
+export const COMPONENT_ANALYSIS_MAX_DIM = 256;
+export const MIN_COMPONENT_AREA_RATIO = 0.005; // 분석 캔버스 전체 픽셀의 0.5% 미만은 잡음으로 간주
+export const THIN_ASPECT_RATIO = 0.12; // min(w,h)/max(w,h)가 이보다 작으면 "가늘고 긴" 형태(난간 등)로 간주
+export const MORPH_CLOSE_RADIUS = 1; // 아주 약한 closing(팽창→침식) - 손/팔 사이 작은 틈을 이어붙임
 // 저해상도에서 찾은 사람 컴포넌트를 원본 해상도로 확대할 때, 다운샘플링으로
 // 잘려나갔을 수 있는 경계(머리카락 끝, 손끝 등)를 보정하기 위한 여유분.
-const COMPONENT_WINDOW_MARGIN_RATIO = 0.06;
+export const COMPONENT_WINDOW_MARGIN_RATIO = 0.06;
 
 /** 자동으로 검출된 사람 bbox(원본 대비 0~1 비율, personalization 보정 "전" 값)와
  * 이번 실행에서 개인화 보정이 실제로 적용됐는지. manualCropCorrection 기록을
@@ -71,11 +74,11 @@ export type CutoutResult = {
   autoCrop: AutoCropInfo | null;
 };
 
-type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
-type Component = BoundingBox & { area: number };
+export type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
+export type Component = BoundingBox & { area: number };
 
 /** alpha가 threshold를 넘는 픽셀만으로 bounding box를 계산한다 (특정 영역으로 한정 가능). */
-function findAlphaBoundingBox(
+export function findAlphaBoundingBox(
   imageData: ImageData,
   region?: BoundingBox
 ): BoundingBox | null {
@@ -107,7 +110,7 @@ function findAlphaBoundingBox(
   return { minX, minY, maxX, maxY };
 }
 
-function buildBinaryMask(imageData: ImageData, threshold: number): Uint8Array {
+export function buildBinaryMask(imageData: ImageData, threshold: number): Uint8Array {
   const { data, width, height } = imageData;
   const mask = new Uint8Array(width * height);
   for (let i = 0; i < width * height; i++) {
@@ -116,7 +119,7 @@ function buildBinaryMask(imageData: ImageData, threshold: number): Uint8Array {
   return mask;
 }
 
-function dilate(mask: Uint8Array, width: number, height: number): Uint8Array {
+export function dilate(mask: Uint8Array, width: number, height: number): Uint8Array {
   const out = new Uint8Array(mask.length);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -134,7 +137,7 @@ function dilate(mask: Uint8Array, width: number, height: number): Uint8Array {
   return out;
 }
 
-function erode(mask: Uint8Array, width: number, height: number): Uint8Array {
+export function erode(mask: Uint8Array, width: number, height: number): Uint8Array {
   const out = new Uint8Array(mask.length);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -153,7 +156,7 @@ function erode(mask: Uint8Array, width: number, height: number): Uint8Array {
 }
 
 /** 아주 약한 closing(팽창 후 침식) - 사람 몸 안의 작은 틈을 이어붙여 하나의 덩어리로 만든다. */
-function morphologicalClose(
+export function morphologicalClose(
   mask: Uint8Array,
   width: number,
   height: number,
@@ -166,7 +169,7 @@ function morphologicalClose(
 }
 
 /** 4방향 연결 기준으로 이진 마스크의 연결영역(component)들을 모두 찾는다. */
-function findConnectedComponents(mask: Uint8Array, width: number, height: number): Component[] {
+export function findConnectedComponents(mask: Uint8Array, width: number, height: number): Component[] {
   const visited = new Uint8Array(mask.length);
   const components: Component[] = [];
   const stackX = new Int32Array(mask.length);
@@ -257,7 +260,7 @@ function findConnectedComponents(mask: Uint8Array, width: number, height: number
  * - 필터링 후 후보가 하나도 없으면, 최소 면적 조건만 적용해 다시 시도한다
  *   (완전히 실패하는 것보다는 최선의 후보를 쓰는 편이 낫다).
  */
-function selectBodyComponent(
+export function selectBodyComponent(
   components: Component[],
   analysisWidth: number,
   analysisHeight: number
