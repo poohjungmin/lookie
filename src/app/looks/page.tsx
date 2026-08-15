@@ -1,12 +1,47 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
 import LookThumbImage from "@/components/LookThumbImage";
+import {
+  isWeatherMissing,
+  recoverMissingWeather,
+  type BulkWeatherRecoveryProgress,
+  type BulkWeatherRecoveryResult,
+} from "@/lib/bulkWeatherRecovery";
 
 export default function LooksPage() {
-  const { looks, syncing } = useApp();
+  const { user, looks, syncing, patchLookWeather } = useApp();
+
+  const missingWeatherLooks = useMemo(() => looks.filter(isWeatherMissing), [looks]);
+
+  const [recovering, setRecovering] = useState(false);
+  const [progress, setProgress] = useState<BulkWeatherRecoveryProgress | null>(null);
+  const [result, setResult] = useState<BulkWeatherRecoveryResult | null>(null);
+
+  async function handleBulkRecoverWeather() {
+    if (recovering || missingWeatherLooks.length === 0) return;
+    setRecovering(true);
+    setResult(null);
+    setProgress({ done: 0, total: missingWeatherLooks.length });
+    try {
+      const res = await recoverMissingWeather(user.uid, missingWeatherLooks, {
+        onProgress: setProgress,
+        // 이미지가 전혀 바뀌지 않았으니, 룩 하나가 성공할 때마다 캐시된
+        // 썸네일/누끼를 무효화하는 refreshSingleLook 대신 weather 필드만
+        // 가볍게 갱신한다 - 전체 룩/캘린더/상세/홈 추천이 완료를 기다리지
+        // 않고 룩이 하나씩 복구되는 대로 즉시 반영된다.
+        onLookRecovered: (lookId, weather, weatherStatus) => {
+          patchLookWeather(lookId, weather, weatherStatus);
+        },
+      });
+      setResult(res);
+    } finally {
+      setRecovering(false);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-2xl px-3 pb-10 pt-10 sm:px-5">
@@ -18,6 +53,41 @@ export default function LooksPage() {
           전체 룩
         </h1>
       </header>
+
+      {/* 날씨 정보가 없는 룩이 하나라도 있을 때만 보여준다 - 전부 정상이면
+          아무것도 표시하지 않아 화면이 복잡해지지 않는다. */}
+      {missingWeatherLooks.length > 0 && (
+        <section className="mb-6 rounded-2xl border border-neutral-100 px-4 py-3.5">
+          {!recovering && !result && (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-neutral-600">
+                날씨 정보 없는 룩 {missingWeatherLooks.length}개
+              </p>
+              <button
+                type="button"
+                onClick={handleBulkRecoverWeather}
+                className="shrink-0 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
+              >
+                날씨 일괄 재조회
+              </button>
+            </div>
+          )}
+          {recovering && (
+            <p className="text-sm text-neutral-500">
+              {!progress || progress.done === 0
+                ? "날씨 정보 확인 중…"
+                : `${progress.done} / ${progress.total} 복구 중`}
+            </p>
+          )}
+          {result && !recovering && (
+            <p className="text-sm text-neutral-600">
+              {result.failed === 0 && result.skippedNoDate === 0
+                ? `${result.succeeded}개 날씨 정보 복구 완료`
+                : `날씨 복구 완료 · 성공 ${result.succeeded}개 · 실패 ${result.failed}개 · 날짜 없음 ${result.skippedNoDate}개`}
+            </p>
+          )}
+        </section>
+      )}
 
       {syncing && looks.length === 0 && (
         <p className="mt-10 text-center text-xs text-neutral-400">

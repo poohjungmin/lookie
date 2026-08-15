@@ -14,7 +14,7 @@ import {
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebase/storage";
 import { db, storage } from "@/lib/firebaseClient";
 import type { CropRatioBox } from "@/lib/cropCorrectionMath";
-import type { WeatherLocationSource } from "@/lib/weather";
+import type { WeatherLocationSource, WeatherResult } from "@/lib/weather";
 
 /** Firestore에 저장하는 날씨 상태 - UI의 세분화된 상태를 3가지로 단순화한다. */
 export type DbWeatherStatus = "success" | "missing_metadata" | "failed";
@@ -35,6 +35,24 @@ export type DbWeather = {
    */
   locationSource: WeatherLocationSource;
 };
+
+/**
+ * weather.ts의 원시 조회 결과를 Firestore 저장 스키마(DbWeather)로 바꾼다.
+ * 업로드/개별 재조회/일괄 재조회가 모두 이 함수 하나만 써서, "weather 필드
+ * 이름 매핑"이 세 곳에 따로 복사돼있다가 나중에 하나만 바뀌는 실수를 막는다.
+ */
+export function toDbWeather(result: WeatherResult, locationSource: WeatherLocationSource): DbWeather {
+  return {
+    weatherCode: result.weatherCode,
+    weatherLabel: result.weatherLabel,
+    tempMax: result.maxTemp,
+    tempMin: result.minTemp,
+    tempMean: result.meanTemp,
+    precipitation: result.precipitationSum,
+    windMax: result.maxWindSpeed,
+    locationSource,
+  };
+}
 
 export type LookRecord = {
   imageUrl: string;

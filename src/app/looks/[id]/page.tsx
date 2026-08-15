@@ -4,7 +4,8 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
-import { formatDateOnly, toUsableDate } from "@/lib/format";
+import { formatDateOnly } from "@/lib/format";
+import { resolveLookDate } from "@/lib/lookDate";
 import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { regenerateLookWeather } from "@/lib/regenerateWeather";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
@@ -35,7 +36,7 @@ function LookDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, looks, syncing, deleteLook, refreshSingleLook } = useApp();
+  const { user, looks, syncing, deleteLook, refreshSingleLook, patchLookWeather } = useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -78,7 +79,7 @@ function LookDetailPageInner() {
   // 예전 룩("missing_metadata"로 굳어있지만 실제로는 유효한 촬영일이 있는
   // 경우)도 여기서 함께 구제된다 - weatherStatus 값 자체가 아니라 실제
   // 촬영일 존재 여부로 재조회 가능 여부를 판단하기 때문.
-  const takenAtDate = toUsableDate(look.takenAt);
+  const takenAtDate = resolveLookDate(look);
 
   // 자동 정규화가 사람을 잘못 판단한 예외 사진을 사용자가 직접 보정하는
   // 유일한 경로. 원본을 먼저 불러온 뒤 크롭 모달을 띄우고, 사용자가 고른
@@ -158,8 +159,10 @@ function LookDetailPageInner() {
     setWeatherRetrying(true);
     setWeatherRetryError(null);
     try {
-      await regenerateLookWeather(user.uid, look);
-      await refreshSingleLook(look.id);
+      const weather = await regenerateLookWeather(user.uid, look);
+      // 이미지가 전혀 바뀌지 않았으니 캐시된 썸네일/누끼를 무효화하는
+      // refreshSingleLook 대신, weather 필드만 가볍게 갱신한다.
+      patchLookWeather(look.id, weather, "success");
     } catch {
       setWeatherRetryError("다시 조회하지 못했어요.");
     } finally {

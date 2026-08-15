@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Timestamp } from "firebase/firestore";
-import { fetchUserLooks, fetchLookById, deleteLookCompletely, type SavedLook } from "@/lib/lookStore";
+import {
+  fetchUserLooks,
+  fetchLookById,
+  deleteLookCompletely,
+  type SavedLook,
+  type DbWeather,
+  type DbWeatherStatus,
+} from "@/lib/lookStore";
 import {
   cacheKeyOf,
   deleteCachedLook,
@@ -389,6 +396,24 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     [uid, revokeObjectUrlsFor, publishFromCacheMap, log]
   );
 
+  // weather/weatherStatus만 바뀐 룩 하나의 로컬 캐시를 가볍게 갱신한다.
+  // refreshSingleLook과 달리 이미지 Blob(썸네일/누끼)은 절대 건드리지
+  // 않는다 - 날씨만 바뀌었을 때 캐시된 이미지를 무효화하고 다시 받는 건
+  // 순전히 낭비이기 때문. 이미 Firestore 업데이트가 끝난 뒤(개별/일괄 날씨
+  // 재조회) 호출하는 용도이므로 네트워크 요청이 전혀 없다 - 로컬 캐시에
+  // 없는 lookId면 조용히 아무 것도 하지 않는다(다음 전체 동기화 때 채워진다).
+  const patchLookWeather = useCallback(
+    (lookId: string, weather: DbWeather | null, weatherStatus: DbWeatherStatus) => {
+      const existing = cacheMap.current.get(lookId);
+      if (!existing) return;
+      const updated: CachedLook = { ...existing, weather, weatherStatus, updatedAtMs: Date.now() };
+      cacheMap.current.set(lookId, updated);
+      void putCachedLook(updated);
+      publishFromCacheMap();
+    },
+    [publishFromCacheMap]
+  );
+
   return {
     looks,
     initialSource,
@@ -396,6 +421,7 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     offline,
     refresh: syncNow,
     refreshSingleLook,
+    patchLookWeather,
     deleteLook,
   };
 }

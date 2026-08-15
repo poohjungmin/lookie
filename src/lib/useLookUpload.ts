@@ -12,6 +12,7 @@ import {
   uploadLookCutout,
   uploadLookCutoutThumbnail,
   saveLookRecord,
+  toDbWeather,
   type DbWeather,
   type DbWeatherStatus,
 } from "@/lib/lookStore";
@@ -149,16 +150,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
       }
 
       const weatherPayload: DbWeather | null = weather
-        ? {
-            weatherCode: weather.weatherCode,
-            weatherLabel: weather.weatherLabel,
-            tempMax: weather.maxTemp,
-            tempMin: weather.minTemp,
-            tempMean: weather.meanTemp,
-            precipitation: weather.precipitationSum,
-            windMax: weather.maxWindSpeed,
-            locationSource: weatherLocationSource ?? "exif",
-          }
+        ? toDbWeather(weather, weatherLocationSource ?? "exif")
         : null;
       const weatherStatus = toDbWeatherStatus(weatherStage);
 
