@@ -84,59 +84,124 @@ function cacheKey(lat: number, lon: number, dateStr: string): string {
   return `${dateStr}_${lat.toFixed(2)}_${lon.toFixed(2)}`;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 최초 시도 실패 후 이 순서대로 기다렸다가 재시도한다 - 총 3회(최초 1회 +
+// 재시도 2회)면 일시적인 네트워크/API 문제는 대부분 커버되고, 무한 재시도로
+// 사진 등록 자체가 오래 멈춰있는 일은 없다.
+const RETRY_DELAYS_MS = [500, 1500];
+
+async function fetchHistoricalWeatherOnce(
+  latitude: number,
+  longitude: number,
+  dateStr: string
+): Promise<WeatherResult> {
+  const url = new URL("https://archive-api.open-meteo.com/v1/archive");
+  url.searchParams.set("latitude", latitude.toFixed(4));
+  url.searchParams.set("longitude", longitude.toFixed(4));
+  url.searchParams.set("start_date", dateStr);
+  url.searchParams.set("end_date", dateStr);
+  url.searchParams.set(
+    "daily",
+    [
+      "weathercode",
+      "temperature_2m_max",
+      "temperature_2m_min",
+      "temperature_2m_mean",
+      "precipitation_sum",
+      "windspeed_10m_max",
+    ].join(",")
+  );
+  url.searchParams.set("timezone", "auto");
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    const err = new Error(`Open-Meteo 응답 오류 (HTTP ${res.status})`);
+    (err as Error & { status?: number }).status = res.status;
+    throw err;
+  }
+
+  const json = await res.json();
+  const daily = json?.daily;
+  if (!daily || !Array.isArray(daily.time) || daily.time.length === 0) {
+    throw new Error("해당 날짜의 날씨 데이터를 찾을 수 없음");
+  }
+
+  const weatherCode: number | null = daily.weathercode?.[0] ?? null;
+
+  return {
+    maxTemp: daily.temperature_2m_max?.[0] ?? null,
+    minTemp: daily.temperature_2m_min?.[0] ?? null,
+    meanTemp: daily.temperature_2m_mean?.[0] ?? null,
+    precipitationSum: daily.precipitation_sum?.[0] ?? null,
+    maxWindSpeed: daily.windspeed_10m_max?.[0] ?? null,
+    weatherCode,
+    weatherLabel: describeWeatherCode(weatherCode),
+  };
+}
+
+async function fetchHistoricalWeatherWithRetry(
+  latitude: number,
+  longitude: number,
+  dateStr: string,
+  logContext?: Record<string, unknown>
+): Promise<WeatherResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetchHistoricalWeatherOnce(latitude, longitude, dateStr);
+    } catch (err) {
+      lastError = err;
+      if (attempt < RETRY_DELAYS_MS.length) {
+        await delay(RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+
+  // 개발 중 원인 확인용 - 사용자 UI에는 복잡한 에러를 노출하지 않고, 여기 콘솔에만 남긴다.
+  const e = lastError as { status?: number; message?: string } | null;
+  console.error("[lookie] 날씨 조회 최종 실패", {
+    ...logContext,
+    latitude,
+    longitude,
+    requestedDate: dateStr,
+    status: e?.status,
+    message: e?.message ?? String(lastError),
+  });
+
+  throw lastError;
+}
+
+export type FetchHistoricalWeatherOptions = {
+  /**
+   * true면 캐시를 읽지 않고 무조건 새 요청을 보낸다(응답은 캐시에 다시
+   * 채워짐). 상세 화면의 "다시 조회" 버튼처럼, 이전에 실패했던 조회를
+   * 사용자가 명시적으로 재시도할 때 쓴다 - 실패한 Promise는 이미 catch에서
+   * 캐시에서 지워지긴 하지만, 그 보장에 기대지 않고 항상 새 네트워크
+   * 요청을 보장하기 위한 명시적 스위치.
+   */
+  forceRefresh?: boolean;
+  /** 실패 로그에 같이 남길 추가 정보 (예: { lookId }). */
+  logContext?: Record<string, unknown>;
+};
+
 export async function fetchHistoricalWeather(
   latitude: number,
   longitude: number,
-  date: Date
+  date: Date,
+  options?: FetchHistoricalWeatherOptions
 ): Promise<WeatherResult> {
   const dateStr = toDateString(date);
   const key = cacheKey(latitude, longitude, dateStr);
 
-  const cached = weatherCache.get(key);
-  if (cached) return cached;
+  if (!options?.forceRefresh) {
+    const cached = weatherCache.get(key);
+    if (cached) return cached;
+  }
 
-  const promise = (async (): Promise<WeatherResult> => {
-    const url = new URL("https://archive-api.open-meteo.com/v1/archive");
-    url.searchParams.set("latitude", latitude.toFixed(4));
-    url.searchParams.set("longitude", longitude.toFixed(4));
-    url.searchParams.set("start_date", dateStr);
-    url.searchParams.set("end_date", dateStr);
-    url.searchParams.set(
-      "daily",
-      [
-        "weathercode",
-        "temperature_2m_max",
-        "temperature_2m_min",
-        "temperature_2m_mean",
-        "precipitation_sum",
-        "windspeed_10m_max",
-      ].join(",")
-    );
-    url.searchParams.set("timezone", "auto");
-
-    const res = await fetch(url.toString());
-    if (!res.ok) {
-      throw new Error(`Open-Meteo 응답 오류 (HTTP ${res.status})`);
-    }
-
-    const json = await res.json();
-    const daily = json?.daily;
-    if (!daily || !Array.isArray(daily.time) || daily.time.length === 0) {
-      throw new Error("해당 날짜의 날씨 데이터를 찾을 수 없음");
-    }
-
-    const weatherCode: number | null = daily.weathercode?.[0] ?? null;
-
-    return {
-      maxTemp: daily.temperature_2m_max?.[0] ?? null,
-      minTemp: daily.temperature_2m_min?.[0] ?? null,
-      meanTemp: daily.temperature_2m_mean?.[0] ?? null,
-      precipitationSum: daily.precipitation_sum?.[0] ?? null,
-      maxWindSpeed: daily.windspeed_10m_max?.[0] ?? null,
-      weatherCode,
-      weatherLabel: describeWeatherCode(weatherCode),
-    };
-  })();
+  const promise = fetchHistoricalWeatherWithRetry(latitude, longitude, dateStr, options?.logContext);
 
   weatherCache.set(key, promise);
   // 실패한 요청은 캐시에서 제거해, 일시적 네트워크 문제로 다음 사진까지

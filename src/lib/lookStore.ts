@@ -215,6 +215,23 @@ export async function updateLookCutoutFields(
   });
 }
 
+/**
+ * 기존 룩의 weather/weatherStatus 필드만 다시 쓴다 (날씨 재조회용).
+ * original/thumbnail/cutout/EXIF(takenAt·GPS)·lookId·createdAt 등 다른 필드는
+ * 절대 건드리지 않는다. updatedAt만 다시 찍어서 local-first 캐시가 이
+ * 변경을 감지하도록 한다(updateLookCutoutFields와 동일한 패턴).
+ */
+export async function updateLookWeatherFields(
+  uid: string,
+  lookId: string,
+  patch: { weather: DbWeather | null; weatherStatus: DbWeatherStatus }
+): Promise<void> {
+  await updateDoc(lookDocRef(uid, lookId), {
+    ...patch,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function saveLookRecord(
   uid: string,
   lookId: string,

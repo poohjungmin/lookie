@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
 import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
+import { regenerateLookWeather } from "@/lib/regenerateWeather";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import { saveManualCropCorrection } from "@/lib/personalCropHeuristic";
 import ManualCutoutCropModal, { type ManualCropResult } from "@/components/ManualCutoutCropModal";
@@ -45,6 +46,11 @@ function LookDetailPageInner() {
   const [cropBusy, setCropBusy] = useState(false);
   const [cropError, setCropError] = useState<string | null>(null);
   const [cropDone, setCropDone] = useState(false);
+
+  // 날씨 다시 조회: 촬영일/GPS는 이미 저장돼 있고 API 조회만 실패했던 룩을
+  // 사진 재업로드 없이 복구한다.
+  const [weatherRetrying, setWeatherRetrying] = useState(false);
+  const [weatherRetryError, setWeatherRetryError] = useState<string | null>(null);
 
   const backHref = resolveBackHref(searchParams);
   const look = looks.find((l) => l.id === id);
@@ -134,6 +140,24 @@ function LookDetailPageInner() {
     }
   }
 
+  // 촬영일/GPS는 이미 저장돼 있고 API 조회만 실패했던 룩을 사진 재업로드
+  // 없이 복구한다. 성공하면 이 룩 하나만 즉시 갱신해서(기존 refreshSingleLook
+  // 재사용) IndexedDB/React state가 그대로 업데이트되고, 홈 추천 계산도
+  // 다음 렌더에서 자연스럽게 새 weather를 반영한다.
+  async function handleRetryWeather() {
+    if (!look) return;
+    setWeatherRetrying(true);
+    setWeatherRetryError(null);
+    try {
+      await regenerateLookWeather(user.uid, look);
+      await refreshSingleLook(look.id);
+    } catch {
+      setWeatherRetryError("다시 조회하지 못했어요.");
+    } finally {
+      setWeatherRetrying(false);
+    }
+  }
+
   async function handleConfirmDelete() {
     if (!look) return;
     setDeleting(true);
@@ -209,11 +233,31 @@ function LookDetailPageInner() {
               </p>
             </div>
           ) : (
-            <p className="text-sm text-neutral-400">
-              {look.weatherStatus === "failed"
-                ? "날씨 조회에 실패했어요"
-                : "이 룩에는 날씨 정보가 없어요"}
-            </p>
+            <div>
+              <p className="text-sm text-neutral-400">
+                {look.weatherStatus === "failed"
+                  ? "날씨 조회에 실패했어요"
+                  : "날씨 조회에 필요한 촬영 위치 정보가 없어요."}
+              </p>
+              {look.weatherStatus === "failed" &&
+                look.takenAt &&
+                look.latitude !== null &&
+                look.longitude !== null && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleRetryWeather}
+                      disabled={weatherRetrying}
+                      className="mt-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 disabled:opacity-50"
+                    >
+                      {weatherRetrying ? "날씨 조회 중…" : "다시 조회"}
+                    </button>
+                    {weatherRetryError && (
+                      <p className="mt-2 text-xs text-red-600">{weatherRetryError}</p>
+                    )}
+                  </>
+                )}
+            </div>
           )}
         </div>
 
