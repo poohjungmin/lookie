@@ -452,6 +452,17 @@ async function runCutout(file: File | Blob): Promise<CutoutResult | null> {
 // /dev/cutout-compare에서 실측되었기 때문이다.
 let cutoutQueue: Promise<unknown> = Promise.resolve();
 
+/** generateCutout/generateCutoutWithDiagnostics가 공유하는 직렬화 큐. */
+function enqueueCutoutTask<T>(task: () => Promise<T>): Promise<T> {
+  const result = cutoutQueue.then(task, task);
+  // 이 작업이 실패해도 큐 자체는 계속 이어져야 다음 작업이 진행된다.
+  cutoutQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
 /**
  * 원본 거울셀카에서 사람 전체(머리~신발)를 하나의 객체로 배경에서 분리하고
  * 사람 본체 bounding box 기준으로 크기/위치를 정규화해, 상세용/목록용 두
@@ -461,11 +472,73 @@ let cutoutQueue: Promise<unknown> = Promise.resolve();
  * 앱 전체에서 동시에 최대 1건만 실행되도록 직렬화되어 있다.
  */
 export function generateCutout(file: File | Blob): Promise<CutoutResult | null> {
-  const task = cutoutQueue.then(
-    () => runCutout(file),
-    () => runCutout(file)
-  );
-  // 이 작업이 실패해도 큐 자체는 계속 이어져야 다음 작업이 진행된다.
-  cutoutQueue = task.catch(() => null);
-  return task;
+  return enqueueCutoutTask(() => runCutout(file));
+}
+
+// --- 진단 전용 -------------------------------------------------------------
+
+export type CutoutDiagnosticStep = "model-or-segment" | "normalize-or-resize";
+
+export type CutoutDiagnosticResult =
+  | { ok: true; result: CutoutResult; usedNormalization: boolean }
+  | {
+      ok: false;
+      step: CutoutDiagnosticStep;
+      error: unknown;
+      /** removeBackground의 progress 콜백이 마지막으로 보고한 phase 키 (CDN fetch인지 추론인지 구분용). */
+      lastProgressPhase: string | null;
+    };
+
+async function runCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagnosticResult> {
+  let lastProgressPhase: string | null = null;
+
+  let rawCutout: Blob;
+  try {
+    const segmentInput = await downscaleImage(file, SEGMENT_INPUT_MAX_DIMENSION, 0.9);
+    rawCutout = await removeBackground(segmentInput, {
+      device: "cpu",
+      output: { format: "image/png" },
+      progress: (key) => {
+        lastProgressPhase = key;
+      },
+    });
+  } catch (error) {
+    return { ok: false, step: "model-or-segment", error, lastProgressPhase };
+  }
+
+  try {
+    const normalized = await normalizeCutout(rawCutout);
+    const baseForResize = normalized ?? rawCutout;
+
+    const [detailBlob, thumbBlob] = await Promise.all([
+      resizeTransparent(baseForResize, DETAIL_MAX_DIMENSION, DETAIL_QUALITY),
+      resizeTransparent(baseForResize, THUMB_MAX_DIMENSION, THUMB_QUALITY),
+    ]);
+
+    if (!detailBlob || !thumbBlob) {
+      return {
+        ok: false,
+        step: "normalize-or-resize",
+        error: new Error("리사이즈 결과가 비어 있음 (캔버스 인코딩 실패)"),
+        lastProgressPhase,
+      };
+    }
+
+    return {
+      ok: true,
+      result: { detailBlob, thumbBlob },
+      usedNormalization: normalized !== null,
+    };
+  } catch (error) {
+    return { ok: false, step: "normalize-or-resize", error, lastProgressPhase };
+  }
+}
+
+/**
+ * generateCutout과 같은 파이프라인이지만 실패를 삼키지 않고 어느 단계에서
+ * 왜 실패했는지 그대로 돌려준다. /dev/cutout-migrate의 단계별 진단 UI 전용 -
+ * 일반 업로드 경로(useLookUpload.ts)는 계속 generateCutout(폴백 우선)을 쓴다.
+ */
+export function generateCutoutWithDiagnostics(file: File | Blob): Promise<CutoutDiagnosticResult> {
+  return enqueueCutoutTask(() => runCutoutWithDiagnostics(file));
 }

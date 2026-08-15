@@ -11,7 +11,7 @@ import {
   orderBy,
   getDocs,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebase/storage";
 import { db, storage } from "@/lib/firebaseClient";
 
 /** Firestore에 저장하는 날씨 상태 - UI의 세분화된 상태를 3가지로 단순화한다. */
@@ -106,6 +106,26 @@ function lookDocRef(uid: string, lookId: string) {
 export async function lookAlreadyExists(uid: string, lookId: string): Promise<boolean> {
   const snap = await getDoc(lookDocRef(uid, lookId));
   return snap.exists();
+}
+
+/**
+ * 저장된 원본 이미지를 Storage에서 다시 받는다 (재누끼 생성용).
+ *
+ * 일부러 `fetch(look.imageUrl)`로 공개 download URL을 다시 읽지 않는다 -
+ * 그건 브라우저의 CORS 검증을 거치는 일반 cross-origin fetch라서, 지금까지
+ * 이 앱이 이미지를 보여줄 때 써온 `<img src>`(CORS 검증 대상 아님)나 업로드
+ * 때 쓰는 `uploadBytes`(Firebase SDK 자체 네트워크 계층)와는 다른 경로다.
+ * 대신 Firebase Storage SDK의 `getBlob()`으로 storagePath를 직접 읽어서,
+ * 업로드 때와 동일하게 검증된 SDK 경로만 타도록 한다.
+ */
+export async function downloadLookOriginal(
+  uid: string,
+  lookId: string,
+  storagePath?: string | null
+): Promise<Blob> {
+  const path = storagePath || `users/${uid}/looks/${lookId}/original`;
+  const storageRef = ref(storage, path);
+  return await getBlob(storageRef);
 }
 
 export async function uploadLookPhoto(
