@@ -214,6 +214,9 @@ function LookDetailPageInner() {
             <div className="space-y-1.5 text-sm text-neutral-600">
               <p className="text-base font-medium text-neutral-800">
                 {look.weather.weatherLabel ?? "-"}
+                {look.weather.locationSource === "fallback-seoul" && (
+                  <span className="ml-1.5 text-xs font-normal text-neutral-300">서울 기준</span>
+                )}
               </p>
               <p>
                 최고{" "}
@@ -237,26 +240,23 @@ function LookDetailPageInner() {
               <p className="text-sm text-neutral-400">
                 {look.weatherStatus === "failed"
                   ? "날씨 조회에 실패했어요"
-                  : "날씨 조회에 필요한 촬영 위치 정보가 없어요."}
+                  : "날씨 조회에 필요한 촬영일 정보가 없어요."}
               </p>
-              {look.weatherStatus === "failed" &&
-                look.takenAt &&
-                look.latitude !== null &&
-                look.longitude !== null && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handleRetryWeather}
-                      disabled={weatherRetrying}
-                      className="mt-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 disabled:opacity-50"
-                    >
-                      {weatherRetrying ? "날씨 조회 중…" : "다시 조회"}
-                    </button>
-                    {weatherRetryError && (
-                      <p className="mt-2 text-xs text-red-600">{weatherRetryError}</p>
-                    )}
-                  </>
-                )}
+              {look.weatherStatus === "failed" && look.takenAt && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleRetryWeather}
+                    disabled={weatherRetrying}
+                    className="mt-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 disabled:opacity-50"
+                  >
+                    {weatherRetrying ? "날씨 조회 중…" : "다시 조회"}
+                  </button>
+                  {weatherRetryError && (
+                    <p className="mt-2 text-xs text-red-600">{weatherRetryError}</p>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>

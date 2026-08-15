@@ -12,6 +12,40 @@ export type WeatherResult = {
   weatherLabel: string;
 };
 
+/**
+ * 이 weather가 실제 사진 GPS 기준인지, GPS가 없어서 서울로 대신 조회한
+ * 것인지 - 사진 자체의 latitude/longitude(EXIF) 필드는 절대 이 fallback
+ * 좌표로 덮어쓰지 않고, weather 쪽에만 출처를 남긴다.
+ */
+export type WeatherLocationSource = "exif" | "fallback-seoul";
+
+/** GPS 없는 사진의 날씨 조회에 쓰는 기본 위치. 필요하면 나중에 설정 가능하게 뺄 수 있도록 한 곳에 모아둔다. */
+export const DEFAULT_WEATHER_LOCATION = {
+  name: "서울",
+  latitude: 37.5665,
+  longitude: 126.978,
+};
+
+/**
+ * 사진의 실제 좌표(있으면)와 서울 fallback 중 무엇을 날씨 조회에 쓸지
+ * 한 곳에서 결정한다. 업로드(useLookUpload.ts)와 수동 재조회
+ * (regenerateWeather.ts)가 이 함수 하나를 공유해서, "GPS 없으면 서울"
+ * 규칙이 두 곳에 따로 구현되지 않게 한다.
+ */
+export function resolveWeatherLocation(
+  latitude: number | null,
+  longitude: number | null
+): { latitude: number; longitude: number; source: WeatherLocationSource } {
+  if (latitude !== null && longitude !== null) {
+    return { latitude, longitude, source: "exif" };
+  }
+  return {
+    latitude: DEFAULT_WEATHER_LOCATION.latitude,
+    longitude: DEFAULT_WEATHER_LOCATION.longitude,
+    source: "fallback-seoul",
+  };
+}
+
 // WMO Weather interpretation codes (Open-Meteo가 그대로 사용)
 const WEATHER_CODE_LABELS: Record<number, string> = {
   0: "맑음",
@@ -209,4 +243,23 @@ export async function fetchHistoricalWeather(
   promise.catch(() => weatherCache.delete(key));
 
   return promise;
+}
+
+/**
+ * "실제 좌표 있으면 그걸로, 없으면 서울로" 결정 + Open-Meteo 조회를 한 번에
+ * 처리하는 진입점. 업로드(useLookUpload.ts)와 상세 화면의 수동 재조회
+ * (regenerateWeather.ts)가 이 함수 하나만 부르면 되므로, GPS-없음 처리
+ * 로직이 두 곳에 따로 구현되지 않는다. latitude/longitude가 null이어도
+ * (GPS 없는 사진) 절대 실패로 취급하지 않고 서울 기준으로 조회한다 -
+ * takenAt이 없어서 애초에 날짜를 모르는 경우만 호출부가 걸러야 한다.
+ */
+export async function fetchHistoricalWeatherForLook(
+  latitude: number | null,
+  longitude: number | null,
+  date: Date,
+  options?: FetchHistoricalWeatherOptions
+): Promise<{ result: WeatherResult; locationSource: WeatherLocationSource }> {
+  const location = resolveWeatherLocation(latitude, longitude);
+  const result = await fetchHistoricalWeather(location.latitude, location.longitude, date, options);
+  return { result, locationSource: location.source };
 }

@@ -14,6 +14,7 @@ import {
 import { ref, uploadBytes, getDownloadURL, deleteObject, getBlob } from "firebase/storage";
 import { db, storage } from "@/lib/firebaseClient";
 import type { CropRatioBox } from "@/lib/cropCorrectionMath";
+import type { WeatherLocationSource } from "@/lib/weather";
 
 /** Firestore에 저장하는 날씨 상태 - UI의 세분화된 상태를 3가지로 단순화한다. */
 export type DbWeatherStatus = "success" | "missing_metadata" | "failed";
@@ -26,6 +27,13 @@ export type DbWeather = {
   tempMean: number | null;
   precipitation: number | null;
   windMax: number | null;
+  /**
+   * 이 날씨가 사진의 실제 EXIF GPS 기준인지("exif"), GPS가 없어서 서울로
+   * 대신 조회한 것인지("fallback-seoul"). 이 필드가 fallback이어도 사진
+   * 자체의 latitude/longitude(EXIF)는 절대 서울 좌표로 덮어쓰지 않는다 -
+   * 이 값은 weather 안에만 존재한다.
+   */
+  locationSource: WeatherLocationSource;
 };
 
 export type LookRecord = {
@@ -296,7 +304,10 @@ function normalizeLookDoc(id: string, raw: Partial<LookRecord>): SavedLook {
     takenAt: raw.takenAt ?? null,
     latitude: raw.latitude ?? null,
     longitude: raw.longitude ?? null,
-    weather: raw.weather ?? null,
+    // locationSource가 없는 예전 문서(이 필드가 생기기 전 저장된 룩)는
+    // 전부 실제 GPS가 있어야만 weather가 저장될 수 있었던 시절의 데이터라
+    // "exif"로 간주해도 안전하다.
+    weather: raw.weather ? { ...raw.weather, locationSource: raw.weather.locationSource ?? "exif" } : null,
     weatherStatus: raw.weatherStatus ?? "missing_metadata",
     category: null,
     dressLevel: null,

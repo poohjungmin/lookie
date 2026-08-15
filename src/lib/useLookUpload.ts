@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Timestamp } from "firebase/firestore";
 import { extractPhotoMetadataSafe } from "@/lib/exif";
-import { fetchHistoricalWeather, type WeatherResult } from "@/lib/weather";
+import { fetchHistoricalWeatherForLook, type WeatherResult, type WeatherLocationSource } from "@/lib/weather";
 import {
   computeFingerprint,
   lookAlreadyExists,
@@ -20,7 +20,7 @@ import { generateCutout, CURRENT_CUTOUT_VERSION } from "@/lib/cutout";
 import { cacheKeyOf, putCachedLook } from "@/lib/lookCache";
 import { getPersonalCorrectionProfile } from "@/lib/personalCropHeuristic";
 
-type WeatherStage = "no-date" | "no-gps" | "done" | "error";
+type WeatherStage = "no-date" | "done" | "error";
 export type SaveStage =
   | "idle"
   | "uploading-photo"
@@ -40,7 +40,7 @@ export type UploadItem = {
 function toDbWeatherStatus(stage: WeatherStage): DbWeatherStatus {
   if (stage === "done") return "success";
   if (stage === "error") return "failed";
-  return "missing_metadata"; // no-date, no-gps
+  return "missing_metadata"; // no-date - GPS 없음은 더 이상 실패 사유가 아니다(서울 fallback)
 }
 
 /**
@@ -66,19 +66,23 @@ export function useLookUpload(uid: string, onSaved: () => void) {
     try {
       const meta = await extractPhotoMetadataSafe(item.file);
 
+      // GPS가 없어도 실패로 취급하지 않는다 - fetchHistoricalWeatherForLook이
+      // 내부에서 "실제 좌표 있으면 그걸로, 없으면 서울로"를 한 번에 처리한다.
+      // 촬영일 자체가 없는 경우만 애초에 조회할 날짜가 없어 건너뛴다.
       let weather: WeatherResult | null = null;
+      let weatherLocationSource: WeatherLocationSource | null = null;
       let weatherStage: WeatherStage;
       if (!meta.hasDate) {
         weatherStage = "no-date";
-      } else if (!meta.hasGps) {
-        weatherStage = "no-gps";
       } else {
         try {
-          weather = await fetchHistoricalWeather(
-            meta.latitude as number,
-            meta.longitude as number,
+          const { result, locationSource } = await fetchHistoricalWeatherForLook(
+            meta.latitude,
+            meta.longitude,
             meta.dateTimeOriginal as Date
           );
+          weather = result;
+          weatherLocationSource = locationSource;
           weatherStage = "done";
         } catch {
           weatherStage = "error";
@@ -153,6 +157,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
             tempMean: weather.meanTemp,
             precipitation: weather.precipitationSum,
             windMax: weather.maxWindSpeed,
+            locationSource: weatherLocationSource ?? "exif",
           }
         : null;
       const weatherStatus = toDbWeatherStatus(weatherStage);
