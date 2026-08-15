@@ -147,11 +147,17 @@ function HistoryPageInner() {
       </div>
 
       {/* 전신 누끼가 잘 보이도록 정사각형이 아니라 세로로 긴 카드 비율을
-          쓴다 (가로 대비 세로 약 1.4배). 누끼는 position:absolute로 셀
-          전체를 채우고(발은 bottom 기준 정렬), 정규화된 누끼 안의 여백
-          때문에 작아 보이지 않도록 표시 단계에서만 살짝 더 확대한다
-          (scale 1.15, 셀 밖으로 나가는 부분은 overflow-hidden으로 클립).
-          날짜 숫자는 누끼 위에 겹쳐서 z-index로 올린다. */}
+          쓴다 (가로 대비 세로 약 1.4배: aspect-[1/1.4], 즉 셀 자체가 누끼
+          정규화 캔버스(1024x1536, 2:3 ≈ 0.667)보다 가로로 살짝 더 넓은
+          비율이다). 이 덕분에 별도 확대 없이 object-contain만으로도
+          object-fit이 "세로" 기준으로 스케일을 맞춰 사람이 이미 셀 높이의
+          거의 전부를 차지한다 - 이전에 있던 scale(1.15)는 여기서 한 번 더
+          확대해 셀 상단 바깥으로 머리를, 유효 영역 자체를 밀어내
+          결과적으로 발이 overflow-hidden에 잘리고 상단 여백만 남는
+          부작용을 냈다(과확대). object-bottom으로 발을 셀 하단에
+          붙이기만 하면 되고, 정규화 캔버스 자체에 이미 발 아래 약간의
+          여백(FOOT_BOTTOM_MARGIN_RATIO)이 있어 발이 셀 픽셀 경계에 딱
+          붙어 보이지도 않는다. 날짜 숫자는 누끼 위에 겹쳐서 z-index로 올린다. */}
       <div className="mt-1 grid grid-cols-7 gap-1">
         {cells.map((date, i) => {
           if (!date) return <div key={i} />;
@@ -184,7 +190,7 @@ function HistoryPageInner() {
                 <>
                   <LookThumbImage
                     look={dayLooks[0]}
-                    className="absolute inset-x-0 bottom-0 h-full w-full origin-bottom scale-[1.15] object-contain object-bottom"
+                    className="absolute inset-x-0 bottom-0 h-full w-full object-contain object-bottom"
                   />
                   {extraCount > 0 && (
                     <span className="absolute bottom-0.5 right-0.5 z-10 rounded-full bg-neutral-900/80 px-1 text-[9px] leading-4 text-white">
