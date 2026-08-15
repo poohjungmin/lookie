@@ -63,6 +63,7 @@ export const OPENING_EROSION_RADIUS = 2;
 export type CleanupMetrics = {
   analysisWidth: number;
   analysisHeight: number;
+  erosionRadiusUsed: number;
   originalBBoxPx: BoundingBox; // 선택된 컴포넌트만 격리한 마스크의 bbox (cleanup 전)
   cleanedBBoxPx: BoundingBox; // cleanup 후 bbox
   originalAreaPixels: number;
@@ -281,12 +282,18 @@ function maskBoundingBox(mask: Uint8Array, width: number, height: number): Bound
  * (마스크 생성 → closing → 컴포넌트 선택)를 거치므로, 여기서 나오는
  * "cleanup 전" 결과는 production이 실제로 고르는 컴포넌트와 동일하다.
  */
-export async function analyzeAndCleanMask(cutoutBlob: Blob): Promise<CleanupAnalysis | null> {
+export async function analyzeAndCleanMask(
+  cutoutBlob: Blob,
+  options?: { analysisMaxDim?: number; erosionRadius?: number }
+): Promise<CleanupAnalysis | null> {
+  const analysisMaxDim = options?.analysisMaxDim ?? CLEANUP_ANALYSIS_MAX_DIM;
+  const erosionRadius = options?.erosionRadius ?? OPENING_EROSION_RADIUS;
+
   const bitmap = await createImageBitmap(cutoutBlob);
 
   const t0 = performance.now();
 
-  const analysisScale = Math.min(1, CLEANUP_ANALYSIS_MAX_DIM / Math.max(bitmap.width, bitmap.height));
+  const analysisScale = Math.min(1, analysisMaxDim / Math.max(bitmap.width, bitmap.height));
   const analysisWidth = Math.max(1, Math.round(bitmap.width * analysisScale));
   const analysisHeight = Math.max(1, Math.round(bitmap.height * analysisScale));
 
@@ -324,7 +331,7 @@ export async function analyzeAndCleanMask(cutoutBlob: Blob): Promise<CleanupAnal
 
   // --- 추가 cleanup: opening by reconstruction ---
   const t1 = performance.now();
-  const eroded = erodeN(isolatedMask, analysisWidth, analysisHeight, OPENING_EROSION_RADIUS);
+  const eroded = erodeN(isolatedMask, analysisWidth, analysisHeight, erosionRadius);
   const mainCore = findLargestComponent(eroded, analysisWidth, analysisHeight);
 
   let cleanedMask: Uint8Array;
@@ -335,13 +342,7 @@ export async function analyzeAndCleanMask(cutoutBlob: Blob): Promise<CleanupAnal
     cleanedMask = isolatedMask;
   } else {
     const coreOnly = isolateComponentMask(eroded, analysisWidth, analysisHeight, mainCore);
-    cleanedMask = reconstructByDilation(
-      coreOnly,
-      isolatedMask,
-      analysisWidth,
-      analysisHeight,
-      OPENING_EROSION_RADIUS + 2
-    );
+    cleanedMask = reconstructByDilation(coreOnly, isolatedMask, analysisWidth, analysisHeight, erosionRadius + 2);
   }
   const cleanupMs = performance.now() - t1;
 
@@ -368,6 +369,7 @@ export async function analyzeAndCleanMask(cutoutBlob: Blob): Promise<CleanupAnal
     metrics: {
       analysisWidth,
       analysisHeight,
+      erosionRadiusUsed: erosionRadius,
       originalBBoxPx,
       cleanedBBoxPx,
       originalAreaPixels,

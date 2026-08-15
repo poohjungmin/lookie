@@ -7,8 +7,13 @@
 //   2. 거기에 얇은 가지(난간/봉 등) 제거를 추가한 결과("B")
 // 를 나란히 비교해서 보여준다. 아무 것도 저장하지 않는다 - 파일 선택 ->
 // 화면 표시가 전부.
+//
+// 배경 제거는 사진당 한 번만 하고(가장 오래 걸리는 단계) 그 결과(blob)를
+// 캐시해둔다 - 아래 슬라이더(침식 반경/분석 해상도)를 조절할 때마다는
+// 캐시된 배경 제거 결과 위에서 마스크 분석만 다시 돌아서, 값을 바꿔가며
+// 빠르게 비교할 수 있다.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { removeBackground } from "@imgly/background-removal";
 import { downscaleImage } from "@/lib/downscaleImage";
 import { SEGMENT_INPUT_MAX_DIMENSION } from "@/lib/cutout";
@@ -18,18 +23,24 @@ import {
   findAlphaBoundingBox,
   placeOnNormalizedCanvas,
   scaleBBoxToSource,
+  CLEANUP_ANALYSIS_MAX_DIM,
+  OPENING_EROSION_RADIUS,
   type CleanupMetrics,
 } from "@/lib/maskCleanupTest";
 
 type RunResult = {
-  originalPreviewUrl: string;
-  rawCutoutUrl: string;
   finalAUrl: string;
   finalBUrl: string;
   isolatedMaskUrl: string;
   cleanedMaskUrl: string;
   removedMaskUrl: string;
   metrics: CleanupMetrics;
+};
+
+type SourceState = {
+  originalPreviewUrl: string;
+  rawCutoutBlob: Blob;
+  rawCutoutUrl: string;
   bgRemovalMs: number;
 };
 
@@ -61,42 +72,26 @@ function canvasToUrl(canvas: HTMLCanvasElement): Promise<string> {
 export default function MaskCleanupTestPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<SourceState | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [running, setRunning] = useState(false);
 
-  async function handleFile(file: File) {
+  const [erosionRadius, setErosionRadius] = useState(OPENING_EROSION_RADIUS);
+  const [analysisMaxDim, setAnalysisMaxDim] = useState(CLEANUP_ANALYSIS_MAX_DIM);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function runCleanup(src: SourceState, params: { erosionRadius: number; analysisMaxDim: number }) {
     setRunning(true);
     setError(null);
-    setResult(null);
-
     try {
-      const originalPreviewUrl = URL.createObjectURL(file);
-
-      // 1) 기존과 동일한 전처리 (cutout.ts runCutout과 동일한 순서/상수)
-      setStatus("배경 제거 준비 중…");
-      const segmentInput = await downscaleImage(file, SEGMENT_INPUT_MAX_DIMENSION, 0.9);
-
-      setStatus("배경 제거 중… (첫 실행은 모델 다운로드로 오래 걸릴 수 있어요)");
-      const bgStart = performance.now();
-      const rawCutout = await removeBackground(segmentInput, {
-        device: "cpu",
-        output: { format: "image/png" },
-      });
-      const bgRemovalMs = performance.now() - bgStart;
-      const rawCutoutUrl = URL.createObjectURL(rawCutout);
-
-      // 2) 기존 방식(A) 컴포넌트 선택 + 개선 방식(B) cleanup
-      setStatus("마스크 분석 + cleanup 중…");
-      const analysis = await analyzeAndCleanMask(rawCutout);
+      const analysis = await analyzeAndCleanMask(src.rawCutoutBlob, params);
       if (!analysis) {
         setError("사람 컴포넌트를 찾지 못했어요 (기존 파이프라인도 이 사진은 정규화 없이 원본 누끼로 폴백해요).");
-        setRunning(false);
-        setStatus(null);
+        setResult(null);
         return;
       }
       const { bitmap, isolatedMask, cleanedMask, metrics } = analysis;
 
-      // 원본 해상도 캔버스 (A/B 최종 배치의 소스)
       const fullCanvas = document.createElement("canvas");
       fullCanvas.width = bitmap.width;
       fullCanvas.height = bitmap.height;
@@ -127,24 +122,67 @@ export default function MaskCleanupTestPage() {
       const [finalAUrl, finalBUrl] = await Promise.all([canvasToUrl(finalACanvas), canvasToUrl(finalBCanvas)]);
 
       setResult({
-        originalPreviewUrl,
-        rawCutoutUrl,
         finalAUrl,
         finalBUrl,
         isolatedMaskUrl: maskToDataUrl(isolatedMask, metrics.analysisWidth, metrics.analysisHeight, [64, 64, 64]),
         cleanedMaskUrl: maskToDataUrl(cleanedMask, metrics.analysisWidth, metrics.analysisHeight, [64, 64, 64]),
         removedMaskUrl: maskToDataUrl(removedMask, metrics.analysisWidth, metrics.analysisHeight, [220, 38, 38]),
         metrics,
-        bgRemovalMs,
       });
       bitmap.close();
       setStatus(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setStatus(null);
     } finally {
       setRunning(false);
     }
+  }
+
+  async function handleFile(file: File) {
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    setSource(null);
+
+    try {
+      const originalPreviewUrl = URL.createObjectURL(file);
+
+      // 기존과 동일한 전처리 (cutout.ts runCutout과 동일한 순서/상수) - 사진당 1회만.
+      setStatus("배경 제거 준비 중…");
+      const segmentInput = await downscaleImage(file, SEGMENT_INPUT_MAX_DIMENSION, 0.9);
+
+      setStatus("배경 제거 중… (첫 실행은 모델 다운로드로 오래 걸릴 수 있어요)");
+      const bgStart = performance.now();
+      const rawCutout = await removeBackground(segmentInput, {
+        device: "cpu",
+        output: { format: "image/png" },
+      });
+      const bgRemovalMs = performance.now() - bgStart;
+      const rawCutoutUrl = URL.createObjectURL(rawCutout);
+
+      const src: SourceState = { originalPreviewUrl, rawCutoutBlob: rawCutout, rawCutoutUrl, bgRemovalMs };
+      setSource(src);
+
+      setStatus("마스크 분석 + cleanup 중…");
+      await runCleanup(src, { erosionRadius, analysisMaxDim });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStatus(null);
+      setRunning(false);
+    }
+  }
+
+  // 슬라이더를 드래그하는 동안 매 tick마다 다시 계산하지 않도록 짧게
+  // debounce한다. touchend/mouseup 이벤트에 의존하면 iOS Safari에서
+  // 이벤트 순서상 아직 안 반영된 state를 읽을 위험이 있어, 값 자체를
+  // 인자로 바로 넘겨서 그 문제를 피한다.
+  function scheduleRecompute(nextErosionRadius: number, nextAnalysisMaxDim: number) {
+    if (!source) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setStatus("마스크 분석 + cleanup 다시 계산 중… (배경 제거는 재사용)");
+      runCleanup(source, { erosionRadius: nextErosionRadius, analysisMaxDim: nextAnalysisMaxDim });
+    }, 200);
   }
 
   return (
@@ -158,7 +196,7 @@ export default function MaskCleanupTestPage() {
       </p>
 
       <label className="mt-6 block w-full cursor-pointer rounded-xl border border-dashed border-neutral-300 px-4 py-6 text-center text-sm text-neutral-500">
-        {running ? status ?? "처리 중…" : "사진 선택하기"}
+        {running ? status ?? "처리 중…" : source ? "다른 사진 선택하기" : "사진 선택하기"}
         <input
           type="file"
           accept="image/*"
@@ -172,9 +210,61 @@ export default function MaskCleanupTestPage() {
         />
       </label>
 
+      {/* 슬라이더 - 배경 제거는 재사용하고 마스크 분석만 다시 돈다 (빠름). */}
+      {source && (
+        <div className="mt-4 space-y-4 rounded-2xl border border-neutral-100 p-4">
+          <div>
+            <div className="flex items-center justify-between text-sm text-neutral-700">
+              <span>침식 반경 (얇은 가지 판정 강도)</span>
+              <span className="font-medium">{erosionRadius}px</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={8}
+              step={1}
+              value={erosionRadius}
+              disabled={running}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setErosionRadius(v);
+                scheduleRecompute(v, analysisMaxDim);
+              }}
+              className="mt-1.5 w-full"
+            />
+            <p className="mt-1 text-xs text-neutral-400">
+              클수록 더 굵은 가지까지 잘라낸다 - 너무 크게 잡으면 팔/손 등 실제 신체가 잘릴 수 있다.
+            </p>
+          </div>
+          <div>
+            <div className="flex items-center justify-between text-sm text-neutral-700">
+              <span>분석 해상도</span>
+              <span className="font-medium">{analysisMaxDim}px</span>
+            </div>
+            <input
+              type="range"
+              min={256}
+              max={896}
+              step={64}
+              value={analysisMaxDim}
+              disabled={running}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setAnalysisMaxDim(v);
+                scheduleRecompute(erosionRadius, v);
+              }}
+              className="mt-1.5 w-full"
+            />
+            <p className="mt-1 text-xs text-neutral-400">
+              클수록 침식 반경이 더 정밀하게(픽셀 단위로) 작동하지만 계산이 조금 더 걸린다.
+            </p>
+          </div>
+        </div>
+      )}
+
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
-      {result && (
+      {result && source && (
         <div className="mt-8 space-y-8">
           {/* 지표 */}
           <section className="rounded-2xl border border-neutral-100 p-4 text-sm">
@@ -184,8 +274,10 @@ export default function MaskCleanupTestPage() {
               <p>
                 {result.metrics.analysisWidth} × {result.metrics.analysisHeight}px
               </p>
+              <p>침식 반경</p>
+              <p>{result.metrics.erosionRadiusUsed}px</p>
               <p>배경 제거 시간</p>
-              <p>{result.bgRemovalMs.toFixed(0)}ms</p>
+              <p>{source.bgRemovalMs.toFixed(0)}ms (사진당 1회, 슬라이더 조절 시 재사용)</p>
               <p>기존 마스크 처리 시간(A)</p>
               <p>{result.metrics.timing.baselineMs.toFixed(1)}ms</p>
               <p>cleanup 추가 시간(B)</p>
@@ -238,14 +330,14 @@ export default function MaskCleanupTestPage() {
                 <p className="mb-1.5 text-center text-xs text-neutral-400">촬영 원본</p>
                 <div className="aspect-[3/4] overflow-hidden rounded-xl bg-neutral-100">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={result.originalPreviewUrl} alt="원본" className="h-full w-full object-contain" />
+                  <img src={source.originalPreviewUrl} alt="원본" className="h-full w-full object-contain" />
                 </div>
               </div>
               <div>
                 <p className="mb-1.5 text-center text-xs text-neutral-400">배경 제거 직후 (정규화 전)</p>
                 <div className="aspect-[3/4] overflow-hidden rounded-xl bg-neutral-100">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={result.rawCutoutUrl} alt="배경 제거 직후" className="h-full w-full object-contain" />
+                  <img src={source.rawCutoutUrl} alt="배경 제거 직후" className="h-full w-full object-contain" />
                 </div>
               </div>
             </div>
