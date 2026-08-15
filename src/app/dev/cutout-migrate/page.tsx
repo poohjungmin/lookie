@@ -8,121 +8,13 @@ import {
   type CutoutDiagnosticStep,
 } from "@/lib/cutout";
 import {
-  downloadLookOriginal,
   uploadLookCutout,
   uploadLookCutoutThumbnail,
   updateLookCutoutFields,
 } from "@/lib/lookStore";
 import { storage } from "@/lib/firebaseClient";
-
-/**
- * fetch()/getBlob()이 둘 다 막혀도 <img> 태그로는 사진이 계속 잘 뜨는
- * 상황이라면(이 앱 전체에서 실제로 그렇다), 광고/추적 차단기나 iOS 콘텐츠
- * 차단기가 "이미지" 리소스 타입은 통과시키고 fetch/XHR 리소스 타입만
- * 막는 흔한 패턴일 수 있다. crossOrigin="anonymous"로 이미지를 로드한 뒤
- * 캔버스에 그려서 Blob으로 재구성하는 세 번째 경로로 이를 우회해본다.
- * (서버가 Access-Control-Allow-Origin: *를 이미 보내는 걸 확인했으므로
- * crossOrigin 이미지도 캔버스 판독이 오염되지 않아야 한다.)
- */
-function loadImageAsBlob(url: string): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          reject(new Error("캔버스 컨텍스트 생성 실패"));
-          return;
-        }
-        ctx.drawImage(img, 0, 0);
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error("캔버스 → Blob 변환 실패 (이미지가 CORS로 오염됐을 수 있음)"));
-        }, "image/jpeg", 0.95);
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    };
-    img.onerror = () => reject(new Error("이미지 로드 실패 (img onerror)"));
-    img.src = url;
-  });
-}
-
-type DownloadAttempt = { ok: true; blob: Blob; ms: number } | { ok: false; err: unknown };
-
-/**
- * 원본을 세 가지 방식으로 동시에 시도한다: SDK getBlob(), 공개 URL fetch(),
- * <img crossOrigin> + 캔버스. 어느 하나라도 성공하면 그 결과를 쓰고,
- * 셋 다 실패하면 세 결과를 전부 담아 던진다 - 호출부는 이 note들을 그대로
- * 화면에 보여주면 된다.
- */
-async function downloadOriginalWithFallbacks(
-  uid: string,
-  lookId: string,
-  storagePath: string | null,
-  imageUrl: string
-): Promise<{ blob: Blob; source: string; notes: string[] }> {
-  const sdkStarted = performance.now();
-  const sdkAttempt: Promise<DownloadAttempt> = withTimeout(
-    downloadLookOriginal(uid, lookId, storagePath),
-    DOWNLOAD_TIMEOUT_MS,
-    "SDK getBlob"
-  ).then(
-    (blob) => ({ ok: true as const, blob, ms: Math.round(performance.now() - sdkStarted) }),
-    (err) => ({ ok: false as const, err })
-  );
-
-  const fetchStarted = performance.now();
-  const fetchAttempt: Promise<DownloadAttempt> = (async () => {
-    if (!imageUrl) return { ok: false as const, err: new Error("imageUrl 없음") };
-    try {
-      const res = await withTimeout(fetch(imageUrl), DOWNLOAD_TIMEOUT_MS, "공개 URL fetch");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      return { ok: true as const, blob, ms: Math.round(performance.now() - fetchStarted) };
-    } catch (err) {
-      return { ok: false as const, err };
-    }
-  })();
-
-  // 세 번째 경로: <img crossOrigin="anonymous"> + 캔버스. fetch/XHR 리소스
-  // 타입만 막고 image 타입은 통과시키는 차단기가 있다면 이 방식만 성공할
-  // 수 있다 (이 앱의 다른 모든 화면에서 <img>는 이미 잘 뜨고 있다).
-  const imgStarted = performance.now();
-  const imgAttempt: Promise<DownloadAttempt> = (async () => {
-    if (!imageUrl) return { ok: false as const, err: new Error("imageUrl 없음") };
-    try {
-      const blob = await withTimeout(loadImageAsBlob(imageUrl), DOWNLOAD_TIMEOUT_MS, "img 태그 로드");
-      return { ok: true as const, blob, ms: Math.round(performance.now() - imgStarted) };
-    } catch (err) {
-      return { ok: false as const, err };
-    }
-  })();
-
-  const [sdkResult, fetchResult, imgResult] = await Promise.all([sdkAttempt, fetchAttempt, imgAttempt]);
-
-  const noteOf = (label: string, r: DownloadAttempt) =>
-    r.ok
-      ? `${label}: 성공 (${r.ms}ms)`
-      : `${label}: 실패 - ${describeError("", r.err).name}: ${describeError("", r.err).message}`;
-  const notes = [
-    noteOf("SDK getBlob", sdkResult),
-    noteOf("공개 URL fetch", fetchResult),
-    noteOf("img 태그+캔버스", imgResult),
-  ];
-
-  if (sdkResult.ok) return { blob: sdkResult.blob, source: "SDK getBlob", notes };
-  if (fetchResult.ok) return { blob: fetchResult.blob, source: "공개 URL fetch", notes };
-  if (imgResult.ok) return { blob: imgResult.blob, source: "img 태그+캔버스", notes };
-
-  const combined = new Error(`원본 다운로드 3가지 방식 모두 실패:\n${notes.join("\n")}`);
-  combined.name = "AllDownloadMethodsFailed";
-  throw combined;
-}
+import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
+import { withTimeout } from "@/lib/timeout";
 
 /** download URL(https://firebasestorage.googleapis.com/v0/b/{bucket}/o/...)에서 버킷 이름만 뽑아낸다. */
 function extractBucketFromUrl(url: string): string | null {
@@ -176,33 +68,6 @@ function describeError(step: string, err: unknown, target?: string): StepError {
   };
 }
 
-/**
- * getBlob() 등 일부 단계가 에러 없이(reject도 resolve도 안 하고) 그냥
- * 멈춰버리는 경우가 실측 확인되었다 - CORS 거부처럼 즉시 실패하는 게
- * 아니라 응답 자체가 안 오는 상태. 무한 대기를 막고, 최소한 "몇 초 내에
- * 응답 없음"이라는 진단 정보라도 남기기 위한 타임아웃 래퍼.
- */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const err = new Error(`${label} - ${Math.round(ms / 1000)}초 내에 응답 없음 (timeout)`);
-      err.name = "TimeoutError";
-      reject(err);
-    }, ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (err) => {
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
-}
-
-const DOWNLOAD_TIMEOUT_MS = 20000;
 const CUTOUT_TIMEOUT_MS = 60000; // 첫 실행 시 모델을 CDN에서 받아야 할 수 있어 넉넉히
 const UPLOAD_TIMEOUT_MS = 20000;
 const FIRESTORE_TIMEOUT_MS = 15000;

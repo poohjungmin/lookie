@@ -11,6 +11,12 @@ function dateKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
+/** dateKey는 getMonth()(0-11, 0-인덱스)를 그대로 담고 있으므로, 표시할 때는 +1 해야 한다. */
+function formatDateKey(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return `${y}.${String(m + 1).padStart(2, "0")}.${String(d).padStart(2, "0")}`;
+}
+
 function buildMonthGrid(year: number, month: number): (Date | null)[] {
   const firstDay = new Date(year, month, 1);
   const startWeekday = firstDay.getDay();
@@ -165,7 +171,7 @@ export default function HistoryPage() {
       {selectedKey && (
         <section className="mt-8 border-t border-neutral-100 px-2 pt-6">
           <h2 className="text-sm font-medium text-neutral-700">
-            {selectedKey.split("-").map(Number).join(".")}
+            {formatDateKey(selectedKey)}
           </h2>
           {selectedLooks.length === 0 ? (
             <p className="mt-4 text-center text-xs text-neutral-300">

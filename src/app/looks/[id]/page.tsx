@@ -4,14 +4,18 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
+import { regenerateLookCutout } from "@/lib/regenerateCutout";
 
 export default function LookDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { looks, syncing, deleteLook } = useApp();
+  const { user, looks, syncing, deleteLook, refreshLooks } = useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenerateError, setRegenerateError] = useState<string | null>(null);
+  const [regenerateDone, setRegenerateDone] = useState(false);
 
   const look = looks.find((l) => l.id === id);
 
@@ -30,6 +34,22 @@ export default function LookDetailPage() {
         </button>
       </div>
     );
+  }
+
+  async function handleRegenerateCutout() {
+    if (!look) return;
+    setRegenerating(true);
+    setRegenerateError(null);
+    setRegenerateDone(false);
+    try {
+      await regenerateLookCutout(user.uid, look);
+      await refreshLooks();
+      setRegenerateDone(true);
+    } catch (err) {
+      setRegenerateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRegenerating(false);
+    }
   }
 
   async function handleConfirmDelete() {
@@ -114,6 +134,34 @@ export default function LookDetailPage() {
                 ? "날씨 조회에 실패했어요"
                 : "이 룩에는 날씨 정보가 없어요"}
             </p>
+          )}
+        </div>
+
+        {/* 누끼가 잘못 잘렸거나 배경이 안 지워졌을 때, 개발 도구를 거치지
+            않고 이 사진만 바로 다시 처리할 수 있는 버튼. */}
+        <div className="mt-4 rounded-2xl border border-neutral-100 p-5">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-neutral-700">누끼 이미지</p>
+            <span className="text-xs text-neutral-400">
+              {look.cutoutUrl ? "생성됨" : "없음"}
+            </span>
+          </div>
+          <p className="mt-1 text-xs text-neutral-400">
+            사람이 이상하게 잘렸거나 배경이 안 지워졌다면 다시 생성해보세요.
+          </p>
+          <button
+            type="button"
+            onClick={handleRegenerateCutout}
+            disabled={regenerating}
+            className="mt-3 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
+          >
+            {regenerating ? "누끼 다시 생성 중…" : "🔄 누끼 다시 생성"}
+          </button>
+          {regenerateDone && (
+            <p className="mt-2 text-xs text-neutral-500">다시 생성했어요.</p>
+          )}
+          {regenerateError && (
+            <p className="mt-2 text-xs text-red-600">실패: {regenerateError}</p>
           )}
         </div>
 
