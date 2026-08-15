@@ -279,3 +279,14 @@ export async function fetchUserLooks(uid: string): Promise<SavedLook[]> {
   const snap = await getDocs(q);
   return snap.docs.map((d) => normalizeLookDoc(d.id, d.data() as Partial<LookRecord>));
 }
+
+/**
+ * 룩 하나만 Firestore에서 다시 읽는다. 누끼 재생성처럼 "이 룩 하나만" 최신
+ * 상태로 반영하면 되는 경우, 전체 목록을 다시 받는 fetchUserLooks보다
+ * 가볍고 즉시 반영된다. 문서가 없으면(삭제 등) null.
+ */
+export async function fetchLookById(uid: string, lookId: string): Promise<SavedLook | null> {
+  const snap = await getDoc(lookDocRef(uid, lookId));
+  if (!snap.exists()) return null;
+  return normalizeLookDoc(snap.id, snap.data() as Partial<LookRecord>);
+}

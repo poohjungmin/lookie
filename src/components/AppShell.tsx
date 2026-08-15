@@ -37,7 +37,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     setDevLog((prev) => [...prev.slice(-49), `${timestamp()}  ${message}`]);
   }, []);
 
-  const { looks, syncing, offline, refresh, deleteLook } = useLocalFirstLooks(
+  const { looks, syncing, offline, refresh, refreshSingleLook, deleteLook } = useLocalFirstLooks(
     user ? user.uid : null,
     log
   );
@@ -108,7 +108,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <AppContext.Provider
-      value={{ user, looks, syncing, offline, refreshLooks: refresh, deleteLook, signOutUser }}
+      value={{
+        user,
+        looks,
+        syncing,
+        offline,
+        refreshLooks: refresh,
+        refreshSingleLook,
+        deleteLook,
+        signOutUser,
+      }}
     >
       <div className="min-h-dvh bg-white pb-24">
         {/* 캐시된 데이터는 보여주되, 방금 동기화가 실패했다면(오프라인 등) 알려준다 */}

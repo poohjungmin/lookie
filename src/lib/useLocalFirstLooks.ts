@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Timestamp } from "firebase/firestore";
-import { fetchUserLooks, deleteLookCompletely, type SavedLook } from "@/lib/lookStore";
+import { fetchUserLooks, fetchLookById, deleteLookCompletely, type SavedLook } from "@/lib/lookStore";
 import {
   cacheKeyOf,
   deleteCachedLook,
@@ -10,6 +10,7 @@ import {
   putCachedLook,
   type CachedLook,
 } from "@/lib/lookCache";
+import { withCacheBust } from "@/lib/cacheBust";
 
 /** 화면에 그대로 쓰는 SavedLook + 목록/캘린더/홈에서 쓸 표시용 썸네일 소스. */
 export type DisplayLook = SavedLook & { thumbSrc: string };
@@ -43,15 +44,19 @@ function savedLookToCacheEntry(uid: string, look: SavedLook): CachedLook {
 }
 
 function cacheEntryToDisplayLook(entry: CachedLook, thumbSrc: string): DisplayLook {
+  // cutout/cutout-thumb는 같은 Storage 경로에 덮어써서 URL 문자열이 재생성
+  // 전후로 동일할 수 있다 - 화면에 실제로 꽂히는 이 두 필드에만 updatedAt
+  // 기반 캐시버스터를 붙여, 브라우저가 이전 재생성 시점의 응답을 그대로
+  // 재사용하지 못하게 한다 (다른 필드/URL은 건드리지 않는다).
   return {
     id: entry.lookId,
     imageUrl: entry.imageUrl,
     storagePath: "",
     thumbnailUrl: entry.thumbnailUrl,
     thumbnailStoragePath: null,
-    cutoutUrl: entry.cutoutUrl,
+    cutoutUrl: withCacheBust(entry.cutoutUrl, entry.updatedAtMs),
     cutoutStoragePath: null,
-    cutoutThumbnailUrl: entry.cutoutThumbnailUrl,
+    cutoutThumbnailUrl: withCacheBust(entry.cutoutThumbnailUrl, entry.updatedAtMs),
     cutoutThumbnailStoragePath: null,
     cutoutVersion: entry.cutoutVersion,
     originalFileName: "",
@@ -93,7 +98,11 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
   const [syncing, setSyncing] = useState(false);
   const [offline, setOffline] = useState(false);
 
-  const objectUrls = useRef<Map<string, string>>(new Map());
+  // key: `${lookId}:${field}` -> 그 Blob으로 만든 object URL. 재생성 후
+  // Blob이 새 인스턴스로 바뀌면(참조가 달라지면) 반드시 이전 URL을 revoke하고
+  // 새로 만든다 - 그냥 "이미 URL이 있으니 재사용"하면 Blob 내용이 바뀌어도
+  // 화면은 계속 예전 이미지를 보여주는 버그가 생긴다.
+  const objectUrls = useRef<Map<string, { url: string; blob: Blob }>>(new Map());
   const cacheMap = useRef<Map<string, CachedLook>>(new Map());
 
   // 목록/캘린더/홈에서 쓸 썸네일 우선순위 (요구사항 8):
@@ -107,14 +116,26 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     if (cachedBlob) {
       const cacheField = entry.cutoutThumbBlob ? "cutout" : "thumb";
       const objectUrlKey = `${entry.lookId}:${cacheField}`;
-      let url = objectUrls.current.get(objectUrlKey);
-      if (!url) {
-        url = URL.createObjectURL(cachedBlob);
-        objectUrls.current.set(objectUrlKey, url);
+      const cached = objectUrls.current.get(objectUrlKey);
+      if (cached && cached.blob === cachedBlob) {
+        return cached.url;
       }
+      if (cached) URL.revokeObjectURL(cached.url);
+      const url = URL.createObjectURL(cachedBlob);
+      objectUrls.current.set(objectUrlKey, { url, blob: cachedBlob });
       return url;
     }
-    return entry.cutoutThumbnailUrl ?? entry.thumbnailUrl ?? entry.imageUrl;
+    // 캐시된 Blob이 없어졌으면(재생성 직후 무효화 등) 이전에 만들어둔 object
+    // URL도 정리한다 - 안 지우면 참조를 잃어 revoke 못 하는 leak이 된다.
+    for (const field of ["cutout", "thumb"]) {
+      const key = `${entry.lookId}:${field}`;
+      const cached = objectUrls.current.get(key);
+      if (cached) {
+        URL.revokeObjectURL(cached.url);
+        objectUrls.current.delete(key);
+      }
+    }
+    return withCacheBust(entry.cutoutThumbnailUrl, entry.updatedAtMs) ?? entry.thumbnailUrl ?? entry.imageUrl;
   }, []);
 
   const publishFromCacheMap = useCallback(() => {
@@ -128,9 +149,9 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
   const revokeObjectUrlsFor = useCallback((lookId: string) => {
     for (const field of ["cutout", "thumb"]) {
       const key = `${lookId}:${field}`;
-      const url = objectUrls.current.get(key);
-      if (url) {
-        URL.revokeObjectURL(url);
+      const cached = objectUrls.current.get(key);
+      if (cached) {
+        URL.revokeObjectURL(cached.url);
         objectUrls.current.delete(key);
       }
     }
@@ -141,7 +162,7 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- 계정이 바뀔 때 이전
        계정의 상태를 즉시 비우는 의도적인 초기화 (다른 계정 캐시 노출 방지) */
-    for (const url of objectUrls.current.values()) URL.revokeObjectURL(url);
+    for (const cached of objectUrls.current.values()) URL.revokeObjectURL(cached.url);
     objectUrls.current.clear();
     cacheMap.current.clear();
     setLooks([]);
@@ -211,10 +232,19 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
 
         const entry = savedLookToCacheEntry(uid, look);
         entry.updatedAtMs = remoteUpdated;
-        entry.thumbBlob = existing?.thumbBlob ?? null;
-        entry.thumbType = existing?.thumbType ?? null;
-        entry.cutoutThumbBlob = existing?.cutoutThumbBlob ?? null;
-        entry.cutoutThumbType = existing?.cutoutThumbType ?? null;
+
+        // updatedAt이 실제로 전진했다면(문서가 진짜로 바뀌었다면) 이전에
+        // 캐싱해둔 Blob은 더 이상 신뢰할 수 없다 - cutout/cutout-thumb은
+        // 같은 Storage 경로에 덮어써서 URL 문자열이 그대로일 수 있으므로,
+        // "URL이 안 바뀌었으니 안전"이라는 가정이 성립하지 않는다. 여기서
+        // 무효화하지 않고 예전 Blob을 그대로 들고 가면, 재생성 직후에도
+        // 홈/캘린더/전체 룩이 계속 예전 누끼를 보여주는 버그가 된다.
+        // (처음 보는 look이거나 캐시가 최신이면 기존 Blob을 그대로 재사용한다.)
+        const isStale = !!existing && existing.updatedAtMs < remoteUpdated;
+        entry.thumbBlob = isStale ? null : existing?.thumbBlob ?? null;
+        entry.thumbType = isStale ? null : existing?.thumbType ?? null;
+        entry.cutoutThumbBlob = isStale ? null : existing?.cutoutThumbBlob ?? null;
+        entry.cutoutThumbType = isStale ? null : existing?.cutoutThumbType ?? null;
 
         if (!entry.thumbBlob && look.thumbnailUrl) {
           try {
@@ -230,7 +260,10 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
 
         if (!entry.cutoutThumbBlob && look.cutoutThumbnailUrl) {
           try {
-            const res = await fetch(look.cutoutThumbnailUrl);
+            // 같은 URL이라도 브라우저 HTTP 캐시가 예전 응답을 그대로 줄 수
+            // 있으므로 버전 쿼리를 붙여 강제로 새로 받는다.
+            const bustedUrl = withCacheBust(look.cutoutThumbnailUrl, remoteUpdated) ?? look.cutoutThumbnailUrl;
+            const res = await fetch(bustedUrl);
             if (res.ok) {
               entry.cutoutThumbBlob = await res.blob();
               entry.cutoutThumbType = entry.cutoutThumbBlob.type;
@@ -292,5 +325,75 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     [uid, revokeObjectUrlsFor, publishFromCacheMap, log]
   );
 
-  return { looks, initialSource, syncing, offline, refresh: syncNow, deleteLook };
+  // 룩 하나만 Firestore에서 다시 읽어 IndexedDB 캐시 + 화면 상태를 갱신한다.
+  // 누끼를 재생성한 직후처럼 "이 룩 하나만" 확실히 최신 상태여야 하는
+  // 경우를 위한 경로 - 전체 목록을 다시 훑는 syncNow와 달리 이 룩의
+  // 이미지 캐시를 조건 없이 무조건 무효화하고 새로 받으므로, 서버
+  // updatedAt이 어쩌다 같은 값이더라도(같은 밀리초 등) 확실히 갱신된다.
+  const refreshSingleLook = useCallback(
+    async (lookId: string) => {
+      if (!uid) return;
+      const remoteLook = await fetchLookById(uid, lookId);
+      if (!remoteLook) {
+        // 그 사이 삭제된 경우 - 로컬에서도 지운다.
+        cacheMap.current.delete(lookId);
+        revokeObjectUrlsFor(lookId);
+        await deleteCachedLook(uid, lookId);
+        publishFromCacheMap();
+        return;
+      }
+
+      const remoteUpdated = updatedAtMs(remoteLook);
+      const entry = savedLookToCacheEntry(uid, remoteLook);
+      entry.updatedAtMs = remoteUpdated;
+      // 무조건 무효화 - 이 함수를 부르는 시점 자체가 "방금 이 룩의 누끼가
+      // 바뀌었다"는 뜻이므로 기존 Blob을 절대 재사용하지 않는다.
+      entry.thumbBlob = null;
+      entry.thumbType = null;
+      entry.cutoutThumbBlob = null;
+      entry.cutoutThumbType = null;
+
+      if (remoteLook.thumbnailUrl) {
+        try {
+          const res = await fetch(withCacheBust(remoteLook.thumbnailUrl, remoteUpdated) ?? remoteLook.thumbnailUrl);
+          if (res.ok) {
+            entry.thumbBlob = await res.blob();
+            entry.thumbType = entry.thumbBlob.type;
+          }
+        } catch {
+          // 못 받아도 메타데이터는 최신으로 반영하고, 화면은 원격 URL로 폴백한다.
+        }
+      }
+
+      if (remoteLook.cutoutThumbnailUrl) {
+        try {
+          const bustedUrl =
+            withCacheBust(remoteLook.cutoutThumbnailUrl, remoteUpdated) ?? remoteLook.cutoutThumbnailUrl;
+          const res = await fetch(bustedUrl);
+          if (res.ok) {
+            entry.cutoutThumbBlob = await res.blob();
+            entry.cutoutThumbType = entry.cutoutThumbBlob.type;
+          }
+        } catch {
+          // 못 받아도 원격 URL(캐시버스팅 적용)로 폴백된다.
+        }
+      }
+
+      cacheMap.current.set(lookId, entry);
+      await putCachedLook(entry);
+      publishFromCacheMap();
+      log(`[local-first] 룩 단건 갱신 완료 (lookId=${lookId})`);
+    },
+    [uid, revokeObjectUrlsFor, publishFromCacheMap, log]
+  );
+
+  return {
+    looks,
+    initialSource,
+    syncing,
+    offline,
+    refresh: syncNow,
+    refreshSingleLook,
+    deleteLook,
+  };
 }

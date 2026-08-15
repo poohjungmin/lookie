@@ -4,26 +4,24 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
 import { formatDateOnly } from "@/lib/format";
-import { regenerateLookCutout, regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
+import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import ManualCutoutCropModal from "@/components/ManualCutoutCropModal";
 
 export default function LookDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { user, looks, syncing, deleteLook, refreshLooks } = useApp();
+  const { user, looks, syncing, deleteLook, refreshSingleLook } = useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [regenerating, setRegenerating] = useState(false);
-  const [regenerateError, setRegenerateError] = useState<string | null>(null);
-  const [regenerateDone, setRegenerateDone] = useState(false);
 
-  // 수동 영역 지정 재생성: 원본 로딩 -> 크롭 모달 -> 크롭 결과로 재생성.
+  // 누끼 수정: "누끼 수정" 탭 -> 원본 로딩 -> 자유 크롭 모달 -> 크롭 결과로 재생성.
   const [cropLoading, setCropLoading] = useState(false);
   const [cropOriginalBlob, setCropOriginalBlob] = useState<Blob | null>(null);
   const [cropBusy, setCropBusy] = useState(false);
   const [cropError, setCropError] = useState<string | null>(null);
+  const [cropDone, setCropDone] = useState(false);
 
   const look = looks.find((l) => l.id === id);
 
@@ -44,29 +42,13 @@ export default function LookDetailPage() {
     );
   }
 
-  async function handleRegenerateCutout() {
-    if (!look) return;
-    setRegenerating(true);
-    setRegenerateError(null);
-    setRegenerateDone(false);
-    try {
-      await regenerateLookCutout(user.uid, look);
-      await refreshLooks();
-      setRegenerateDone(true);
-    } catch (err) {
-      setRegenerateError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRegenerating(false);
-    }
-  }
-
-  // 자동 정규화가 사람을 잘못 판단한 예외 사진을 위한 경로. 원본을 먼저
-  // 불러온 뒤 크롭 모달을 띄우고, 사용자가 고른 영역만 재생성 파이프라인에 넣는다.
+  // 자동 정규화가 사람을 잘못 판단한 예외 사진을 사용자가 직접 보정하는
+  // 유일한 경로. 원본을 먼저 불러온 뒤 크롭 모달을 띄우고, 사용자가 고른
+  // 영역만 배경 제거 + 정규화 파이프라인에 넣는다.
   async function handleStartManualCrop() {
     if (!look) return;
     setCropError(null);
-    setRegenerateError(null);
-    setRegenerateDone(false);
+    setCropDone(false);
     setCropLoading(true);
     try {
       const { blob } = await downloadOriginalWithFallbacks(
@@ -91,9 +73,11 @@ export default function LookDetailPage() {
     setCropError(null);
     try {
       await regenerateLookCutoutFromCrop(user.uid, look.id, croppedBlob);
-      await refreshLooks();
+      // 목록 전체를 다시 훑지 않고 이 룩 하나만 즉시 최신 상태로 갱신한다 -
+      // 홈/캘린더/전체 룩이 별도 새로고침 없이 바로 새 누끼를 보여준다.
+      await refreshSingleLook(look.id);
       setCropOriginalBlob(null);
-      setRegenerateDone(true);
+      setCropDone(true);
     } catch (err) {
       setCropError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -187,7 +171,8 @@ export default function LookDetailPage() {
         </div>
 
         {/* 누끼가 잘못 잘렸거나 배경이 안 지워졌을 때, 개발 도구를 거치지
-            않고 이 사진만 바로 다시 처리할 수 있는 버튼. */}
+            않고 이 사진만 바로 고칠 수 있는 카드. 자동 재생성은 쓰지 않아서
+            제거했고, 원본에서 영역을 직접 지정하는 방식만 남겼다. */}
         <div className="mt-4 rounded-2xl border border-neutral-100 p-5">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-neutral-700">누끼 이미지</p>
@@ -196,7 +181,7 @@ export default function LookDetailPage() {
             </span>
           </div>
           <p className="mt-1 text-xs text-neutral-400">
-            사람이 이상하게 잘렸거나 배경이 안 지워졌다면 다시 생성해보세요.
+            사람이 이상하게 잘렸거나 배경이 안 지워졌다면 직접 영역을 지정해서 고쳐보세요.
           </p>
 
           {look.cutoutUrl ?? look.cutoutThumbnailUrl ? (
@@ -216,29 +201,15 @@ export default function LookDetailPage() {
 
           <button
             type="button"
-            onClick={handleRegenerateCutout}
-            disabled={regenerating || cropLoading || cropBusy}
+            onClick={handleStartManualCrop}
+            disabled={cropLoading || cropBusy}
             className="mt-3 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
           >
-            {regenerating ? "자동으로 다시 생성 중…" : "🔄 자동으로 다시 생성"}
+            {cropLoading ? "원본 불러오는 중…" : "✂️ 누끼 수정"}
           </button>
 
-          {/* 사람이 원본에서 작거나 거울 난간 등으로 자동 정규화가 실패한
-              예외 사진용 - 영역을 직접 맞춰서 그 부분만 다시 생성한다. */}
-          <button
-            type="button"
-            onClick={handleStartManualCrop}
-            disabled={regenerating || cropLoading || cropBusy}
-            className="mt-2 w-full rounded-xl border border-neutral-300 py-2.5 text-center text-sm font-medium text-neutral-800 disabled:opacity-50"
-          >
-            {cropLoading ? "원본 불러오는 중…" : "🎯 영역 지정해서 다시 생성"}
-          </button>
-
-          {regenerateDone && (
+          {cropDone && (
             <p className="mt-2 text-xs text-neutral-500">다시 생성했어요.</p>
-          )}
-          {regenerateError && (
-            <p className="mt-2 text-xs text-red-600">실패: {regenerateError}</p>
           )}
           {cropError && (
             <p className="mt-2 text-xs text-red-600">실패: {cropError}</p>
