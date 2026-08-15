@@ -109,8 +109,11 @@ export default function HistoryPage() {
       </div>
 
       {/* 전신 누끼가 잘 보이도록 정사각형이 아니라 세로로 긴 카드 비율을
-          쓴다 (가로 대비 세로 약 1.4배). 날짜 숫자는 상단에 작게,
-          누끼는 셀 중앙~하단에 object-contain으로 채운다. */}
+          쓴다 (가로 대비 세로 약 1.4배). 누끼는 position:absolute로 셀
+          전체를 채우고(발은 bottom 기준 정렬), 정규화된 누끼 안의 여백
+          때문에 작아 보이지 않도록 표시 단계에서만 살짝 더 확대한다
+          (scale 1.15, 셀 밖으로 나가는 부분은 overflow-hidden으로 클립).
+          날짜 숫자는 누끼 위에 겹쳐서 z-index로 올린다. */}
       <div className="mt-1 grid grid-cols-7 gap-1">
         {cells.map((date, i) => {
           if (!date) return <div key={i} />;
@@ -126,13 +129,13 @@ export default function HistoryPage() {
               type="button"
               onClick={() => setSelectedKey(isSelected ? null : key)}
               className={
-                "relative flex aspect-[1/1.4] flex-col overflow-hidden rounded-lg bg-neutral-50 " +
+                "relative aspect-[1/1.4] overflow-hidden rounded-lg bg-neutral-50 " +
                 (isSelected ? "ring-2 ring-neutral-900" : "")
               }
             >
               <span
                 className={
-                  "px-1 pt-0.5 text-left text-[10px] leading-tight " +
+                  "absolute left-1 top-0.5 z-10 text-[10px] leading-tight " +
                   (isToday ? "font-semibold text-neutral-900" : "text-neutral-400")
                 }
               >
@@ -140,19 +143,19 @@ export default function HistoryPage() {
               </span>
 
               {dayLooks && dayLooks[0] && (
-                <div className="relative flex-1 px-0.5 pb-0.5">
+                <>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={dayLooks[0].thumbSrc}
                     alt=""
-                    className="h-full w-full object-contain object-bottom"
+                    className="absolute inset-x-0 bottom-0 h-full w-full origin-bottom scale-[1.15] object-contain object-bottom"
                   />
                   {extraCount > 0 && (
-                    <span className="absolute bottom-0.5 right-0.5 rounded-full bg-neutral-900/80 px-1 text-[9px] leading-4 text-white">
+                    <span className="absolute bottom-0.5 right-0.5 z-10 rounded-full bg-neutral-900/80 px-1 text-[9px] leading-4 text-white">
                       +{extraCount}
                     </span>
                   )}
-                </div>
+                </>
               )}
             </button>
           );

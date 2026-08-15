@@ -15,16 +15,32 @@ const THUMB_QUALITY = 0.75;
 // 전에 먼저 1024px로 줄인 사본을 사용한다.
 const SEGMENT_INPUT_MAX_DIMENSION = 1024;
 
+// 이 번호를 올리면 /dev/cutout-migrate가 "재생성 필요"로 판단한다.
+// 기존에 저장된 누끼(또는 cutoutVersion이 아예 없는 룩)는 이 값보다
+// 낮은 것으로 취급된다.
+export const CURRENT_CUTOUT_VERSION = 2;
+
 // --- 사람 크기/위치 정규화 -------------------------------------------------
 // 정규화는 이 내부 작업용 캔버스(2:3 세로 비율) 위에서 한 번 수행하고,
 // 상세/썸네일은 이 결과를 그대로 리사이즈만 한다 - 그래서 두 사이즈의
 // 사람 비율·정렬이 항상 똑같다.
 const NORMALIZE_CANVAS_WIDTH = 1024;
 const NORMALIZE_CANVAS_HEIGHT = 1536;
-const BBOX_PADDING_RATIO = 0.08; // bounding box 상하좌우 8% 여백
-const BODY_HEIGHT_RATIO = 0.86; // 머리~발이 캔버스 높이의 86%를 차지하도록 스케일
-const FOOT_BOTTOM_MARGIN_RATIO = 0.05; // 발이 캔버스 하단에서 5% 위 고정 위치
+const CROP_PADDING_RATIO = 0.04; // bounding box 상하좌우 4% 여백 (최소화)
+const BODY_HEIGHT_RATIO = 0.95; // 머리~발이 캔버스 높이의 95%를 차지하도록 스케일
+const FOOT_BOTTOM_MARGIN_RATIO = 0.025; // 발이 캔버스 하단에서 2.5% 위 고정 위치
 const ALPHA_THRESHOLD = 10; // 이보다 낮은 알파는 노이즈로 보고 "사람"에서 제외
+
+// person 컴포넌트를 고를 때 쓰는, 저해상도 연결영역 분석용 설정.
+// 다운샘플로 충분히 빠르면서도 거울 난간/스트랩 같은 가늘고 긴 잔여물과
+// 사람 본체를 구분할 수 있는 해상도.
+const COMPONENT_ANALYSIS_MAX_DIM = 256;
+const MIN_COMPONENT_AREA_RATIO = 0.005; // 분석 캔버스 전체 픽셀의 0.5% 미만은 잡음으로 간주
+const THIN_ASPECT_RATIO = 0.12; // min(w,h)/max(w,h)가 이보다 작으면 "가늘고 긴" 형태(난간 등)로 간주
+const MORPH_CLOSE_RADIUS = 1; // 아주 약한 closing(팽창→침식) - 손/팔 사이 작은 틈을 이어붙임
+// 저해상도에서 찾은 사람 컴포넌트를 원본 해상도로 확대할 때, 다운샘플링으로
+// 잘려나갔을 수 있는 경계(머리카락 끝, 손끝 등)를 보정하기 위한 여유분.
+const COMPONENT_WINDOW_MARGIN_RATIO = 0.06;
 
 export type CutoutResult = {
   detailBlob: Blob;
@@ -32,18 +48,27 @@ export type CutoutResult = {
 };
 
 type BoundingBox = { minX: number; minY: number; maxX: number; maxY: number };
+type Component = BoundingBox & { area: number };
 
-/** alpha가 threshold를 넘는 픽셀만으로 사람 영역의 bounding box를 계산한다. */
-function findAlphaBoundingBox(imageData: ImageData): BoundingBox | null {
+/** alpha가 threshold를 넘는 픽셀만으로 bounding box를 계산한다 (특정 영역으로 한정 가능). */
+function findAlphaBoundingBox(
+  imageData: ImageData,
+  region?: BoundingBox
+): BoundingBox | null {
   const { data, width, height } = imageData;
+  const startX = region ? Math.max(0, Math.floor(region.minX)) : 0;
+  const startY = region ? Math.max(0, Math.floor(region.minY)) : 0;
+  const endX = region ? Math.min(width - 1, Math.ceil(region.maxX)) : width - 1;
+  const endY = region ? Math.min(height - 1, Math.ceil(region.maxY)) : height - 1;
+
   let minX = width;
   let minY = height;
   let maxX = -1;
   let maxY = -1;
 
-  for (let y = 0; y < height; y++) {
+  for (let y = startY; y <= endY; y++) {
     const rowOffset = y * width;
-    for (let x = 0; x < width; x++) {
+    for (let x = startX; x <= endX; x++) {
       const alpha = data[(rowOffset + x) * 4 + 3];
       if (alpha > ALPHA_THRESHOLD) {
         if (x < minX) minX = x;
@@ -58,16 +83,196 @@ function findAlphaBoundingBox(imageData: ImageData): BoundingBox | null {
   return { minX, minY, maxX, maxY };
 }
 
+function buildBinaryMask(imageData: ImageData, threshold: number): Uint8Array {
+  const { data, width, height } = imageData;
+  const mask = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    mask[i] = data[i * 4 + 3] > threshold ? 1 : 0;
+  }
+  return mask;
+}
+
+function dilate(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const out = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let v = 0;
+      for (let dy = -1; dy <= 1 && !v; dy++) {
+        for (let dx = -1; dx <= 1 && !v; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height && mask[ny * width + nx]) v = 1;
+        }
+      }
+      out[y * width + x] = v;
+    }
+  }
+  return out;
+}
+
+function erode(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const out = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let v = 1;
+      for (let dy = -1; dy <= 1 && v; dy++) {
+        for (let dx = -1; dx <= 1 && v; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height || !mask[ny * width + nx]) v = 0;
+        }
+      }
+      out[y * width + x] = v;
+    }
+  }
+  return out;
+}
+
+/** 아주 약한 closing(팽창 후 침식) - 사람 몸 안의 작은 틈을 이어붙여 하나의 덩어리로 만든다. */
+function morphologicalClose(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  radius: number
+): Uint8Array {
+  let m = mask;
+  for (let i = 0; i < radius; i++) m = dilate(m, width, height);
+  for (let i = 0; i < radius; i++) m = erode(m, width, height);
+  return m;
+}
+
+/** 4방향 연결 기준으로 이진 마스크의 연결영역(component)들을 모두 찾는다. */
+function findConnectedComponents(mask: Uint8Array, width: number, height: number): Component[] {
+  const visited = new Uint8Array(mask.length);
+  const components: Component[] = [];
+  const stackX = new Int32Array(mask.length);
+  const stackY = new Int32Array(mask.length);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (!mask[idx] || visited[idx]) continue;
+
+      let top = 0;
+      stackX[top] = x;
+      stackY[top] = y;
+      top++;
+      visited[idx] = 1;
+
+      let area = 0;
+      let minX = x;
+      let maxX = x;
+      let minY = y;
+      let maxY = y;
+
+      while (top > 0) {
+        top--;
+        const cx = stackX[top];
+        const cy = stackY[top];
+        area++;
+        if (cx < minX) minX = cx;
+        if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy;
+        if (cy > maxY) maxY = cy;
+
+        const left = cx - 1;
+        const right = cx + 1;
+        const up = cy - 1;
+        const down = cy + 1;
+
+        if (left >= 0) {
+          const nIdx = cy * width + left;
+          if (mask[nIdx] && !visited[nIdx]) {
+            visited[nIdx] = 1;
+            stackX[top] = left;
+            stackY[top] = cy;
+            top++;
+          }
+        }
+        if (right < width) {
+          const nIdx = cy * width + right;
+          if (mask[nIdx] && !visited[nIdx]) {
+            visited[nIdx] = 1;
+            stackX[top] = right;
+            stackY[top] = cy;
+            top++;
+          }
+        }
+        if (up >= 0) {
+          const nIdx = up * width + cx;
+          if (mask[nIdx] && !visited[nIdx]) {
+            visited[nIdx] = 1;
+            stackX[top] = cx;
+            stackY[top] = up;
+            top++;
+          }
+        }
+        if (down < height) {
+          const nIdx = down * width + cx;
+          if (mask[nIdx] && !visited[nIdx]) {
+            visited[nIdx] = 1;
+            stackX[top] = cx;
+            stackY[top] = down;
+            top++;
+          }
+        }
+      }
+
+      components.push({ area, minX, minY, maxX, maxY });
+    }
+  }
+
+  return components;
+}
+
 /**
- * 누끼 결과를 사람 bounding box 기준으로 정규화한다:
- * 1) alpha>0 픽셀로 bounding box 계산
- * 2) 상하좌우 8% padding 추가
- * 3) 고정 캔버스(2:3 비율)에 다시 배치
- * 4) 발(bbox 하단)이 항상 캔버스 하단의 같은 위치에 오도록 정렬
- * 5) 가로 중앙 정렬
- * 6) 머리~발 길이가 캔버스 높이의 일정 비율을 차지하도록 스케일링
+ * 연결영역들 중 "사람 본체"를 고른다.
+ * - 너무 작은(잡음) 컴포넌트는 제외
+ * - 거울 난간/가방끈처럼 가늘고 긴 컴포넌트는 우선 제외
+ * - 남은 후보 중 면적(픽셀 수)이 가장 큰 것을 선택
+ * - 필터링 후 후보가 하나도 없으면, 최소 면적 조건만 적용해 다시 시도한다
+ *   (완전히 실패하는 것보다는 최선의 후보를 쓰는 편이 낫다).
+ */
+function selectBodyComponent(
+  components: Component[],
+  analysisWidth: number,
+  analysisHeight: number
+): Component | null {
+  const totalPixels = analysisWidth * analysisHeight;
+  const minArea = totalPixels * MIN_COMPONENT_AREA_RATIO;
+
+  const sizable = components.filter((c) => c.area >= minArea);
+  if (sizable.length === 0) return null;
+
+  const notThin = sizable.filter((c) => {
+    const w = c.maxX - c.minX + 1;
+    const h = c.maxY - c.minY + 1;
+    const thinness = Math.min(w, h) / Math.max(w, h);
+    return thinness >= THIN_ASPECT_RATIO;
+  });
+
+  const pool = notThin.length > 0 ? notThin : sizable;
+  pool.sort((a, b) => b.area - a.area);
+  return pool[0];
+}
+
+/**
+ * 누끼 결과를 사람 bounding box 기준으로 정규화한다.
+ *
+ * 1) 저해상도로 축소한 alpha 마스크에서 연결영역(connected component)을
+ *    찾아 "사람 본체"를 고른다 (거울 난간·가방끈 같은 떨어진/가느다란
+ *    잔여물은 제외) - 이게 기존 "alpha>0 전체 bbox" 방식의 핵심 결함을 고친 부분.
+ * 2) 그 컴포넌트를 원본 해상도 좌표로 확대 매핑하고, 그 주변 창(window)
+ *    안에서만 정밀 bbox를 다시 계산한다 (하위 해상도에서 잘린 경계 보정,
+ *    가방/머리카락처럼 본체에 실제로 붙어있는 디테일은 유지).
+ * 3) bbox 상하좌우에 4% padding을 더한다.
+ * 4) 고정 캔버스(2:3 비율)에 다시 배치한다.
+ * 5) 발(bbox 하단)이 항상 캔버스 하단의 같은 위치에 오도록 정렬한다.
+ * 6) 가로 중앙 정렬한다.
+ * 7) 머리~발 길이가 캔버스 높이의 95%를 차지하도록 스케일링한다
  *    → 같은 사람이 다른 거리/줌으로 찍혀도 화면상 크기가 비슷해 보인다.
- * bbox를 못 찾으면(완전 투명 등) null - 호출부는 정규화 없이 원본 누끼로 폴백한다.
+ *
+ * 사람 본체를 못 찾으면 null - 호출부는 정규화 없이 원본 누끼로 폴백한다.
  */
 async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
   try {
@@ -79,15 +284,48 @@ async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
       const srcCtx = srcCanvas.getContext("2d");
       if (!srcCtx) return null;
       srcCtx.drawImage(bitmap, 0, 0);
+      const fullImageData = srcCtx.getImageData(0, 0, bitmap.width, bitmap.height);
 
-      const imageData = srcCtx.getImageData(0, 0, bitmap.width, bitmap.height);
-      const bbox = findAlphaBoundingBox(imageData);
+      // 1) 저해상도 분석용 캔버스
+      const analysisScale = Math.min(1, COMPONENT_ANALYSIS_MAX_DIM / Math.max(bitmap.width, bitmap.height));
+      const analysisWidth = Math.max(1, Math.round(bitmap.width * analysisScale));
+      const analysisHeight = Math.max(1, Math.round(bitmap.height * analysisScale));
+
+      const analysisCanvas = document.createElement("canvas");
+      analysisCanvas.width = analysisWidth;
+      analysisCanvas.height = analysisHeight;
+      const analysisCtx = analysisCanvas.getContext("2d");
+      if (!analysisCtx) return null;
+      analysisCtx.drawImage(srcCanvas, 0, 0, analysisWidth, analysisHeight);
+      const analysisImageData = analysisCtx.getImageData(0, 0, analysisWidth, analysisHeight);
+
+      const binaryMask = buildBinaryMask(analysisImageData, ALPHA_THRESHOLD);
+      const closedMask = morphologicalClose(binaryMask, analysisWidth, analysisHeight, MORPH_CLOSE_RADIUS);
+      const components = findConnectedComponents(closedMask, analysisWidth, analysisHeight);
+      const bodyComponent = selectBodyComponent(components, analysisWidth, analysisHeight);
+      if (!bodyComponent) return null;
+
+      // 2) 저해상도 컴포넌트를 원본 좌표로 확대 매핑 + 여유 창(margin) 부여
+      const scaleBack = bitmap.width / analysisWidth;
+      const compW = bodyComponent.maxX - bodyComponent.minX + 1;
+      const compH = bodyComponent.maxY - bodyComponent.minY + 1;
+      const marginX = compW * scaleBack * COMPONENT_WINDOW_MARGIN_RATIO;
+      const marginY = compH * scaleBack * COMPONENT_WINDOW_MARGIN_RATIO;
+
+      const windowRegion: BoundingBox = {
+        minX: bodyComponent.minX * scaleBack - marginX,
+        minY: bodyComponent.minY * scaleBack - marginY,
+        maxX: (bodyComponent.maxX + 1) * scaleBack + marginX,
+        maxY: (bodyComponent.maxY + 1) * scaleBack + marginY,
+      };
+
+      const bbox = findAlphaBoundingBox(fullImageData, windowRegion);
       if (!bbox) return null;
 
       const bboxWidth = bbox.maxX - bbox.minX + 1;
       const bboxHeight = bbox.maxY - bbox.minY + 1;
-      const padX = bboxWidth * BBOX_PADDING_RATIO;
-      const padY = bboxHeight * BBOX_PADDING_RATIO;
+      const padX = bboxWidth * CROP_PADDING_RATIO;
+      const padY = bboxHeight * CROP_PADDING_RATIO;
 
       const cropMinX = Math.max(0, bbox.minX - padX);
       const cropMinY = Math.max(0, bbox.minY - padY);
@@ -97,7 +335,7 @@ async function normalizeCutout(cutoutBlob: Blob): Promise<Blob | null> {
       const cropHeight = cropMaxY - cropMinY;
       if (cropWidth <= 0 || cropHeight <= 0) return null;
 
-      // 머리~발(원본 bbox, padding 제외) 길이 기준으로 스케일을 정한다.
+      // 머리~발(padding 제외한 실제 bbox) 길이 기준으로 스케일을 정한다.
       // 사람이 캔버스보다 옆으로 넘치면 가로 기준으로 한 번 더 제한한다.
       let scale = (NORMALIZE_CANVAS_HEIGHT * BODY_HEIGHT_RATIO) / bboxHeight;
       if (cropWidth * scale > NORMALIZE_CANVAS_WIDTH) {
@@ -190,8 +428,8 @@ async function runCutout(file: File | Blob): Promise<CutoutResult | null> {
       output: { format: "image/png" },
     });
 
-    // 정규화에 실패해도(bbox를 못 찾는 등) 누끼 자체는 살려서, 사람 크기가
-    // 제각각이더라도 최소한 배경은 제거된 상태로 저장되게 한다.
+    // 정규화에 실패해도(본체 컴포넌트를 못 찾는 등) 누끼 자체는 살려서,
+    // 사람 크기가 제각각이더라도 최소한 배경은 제거된 상태로 저장되게 한다.
     const normalized = await normalizeCutout(rawCutout);
     const baseForResize = normalized ?? rawCutout;
 
@@ -216,9 +454,9 @@ let cutoutQueue: Promise<unknown> = Promise.resolve();
 
 /**
  * 원본 거울셀카에서 사람 전체(머리~신발)를 하나의 객체로 배경에서 분리하고
- * bounding box 기준으로 크기/위치를 정규화해, 상세용/목록용 두 사이즈의
- * 투명 이미지를 만든다. 무거운 세그멘테이션 추론은 한 번만 실행하고, 두
- * 사이즈는 정규화된 결과를 캔버스로 리사이즈만 하므로 빠르다.
+ * 사람 본체 bounding box 기준으로 크기/위치를 정규화해, 상세용/목록용 두
+ * 사이즈의 투명 이미지를 만든다. 무거운 세그멘테이션 추론은 한 번만
+ * 실행하고, 두 사이즈는 정규화된 결과를 캔버스로 리사이즈만 하므로 빠르다.
  * 실패하면(모델 로드 실패, 메모리 부족 등) null - 호출부는 원본으로 폴백해야 한다.
  * 앱 전체에서 동시에 최대 1건만 실행되도록 직렬화되어 있다.
  */

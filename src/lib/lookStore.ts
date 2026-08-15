@@ -47,6 +47,13 @@ export type LookRecord = {
   /** 목록/캘린더/홈용 누끼 썸네일(긴 변 약 400~500px, 가능하면 투명 WebP). */
   cutoutThumbnailUrl: string | null;
   cutoutThumbnailStoragePath: string | null;
+  /**
+   * 이 룩의 cutout/cutoutThumbnail이 생성된 정규화 알고리즘 버전.
+   * null/undefined는 "누끼가 없거나 버전 표시 이전의 예전 알고리즘"으로
+   * 취급한다 - /dev/cutout-migrate가 CURRENT_CUTOUT_VERSION보다 낮은
+   * 룩만 골라 다시 생성한다.
+   */
+  cutoutVersion: number | null;
   originalFileName: string;
 
   takenAt: Timestamp | null;
@@ -150,9 +157,10 @@ export async function uploadLookCutoutThumbnail(
 }
 
 /**
- * 기존 룩에 누끼 필드만 추가로 채운다 (마이그레이션용).
- * 다른 필드는 건드리지 않고, updatedAt만 다시 찍어서 local-first 캐시가
- * 이 변경을 감지해 썸네일을 다시 받도록 한다.
+ * 기존 룩에 누끼 관련 필드만 추가/갱신한다 (마이그레이션용).
+ * EXIF·날씨·createdAt·fingerprint 등 다른 필드는 절대 건드리지 않는다.
+ * updatedAt만 다시 찍어서 local-first 캐시가 이 변경을 감지해 썸네일을
+ * 다시 받도록 한다.
  */
 export async function updateLookCutoutFields(
   uid: string,
@@ -162,6 +170,7 @@ export async function updateLookCutoutFields(
     cutoutStoragePath: string;
     cutoutThumbnailUrl: string;
     cutoutThumbnailStoragePath: string;
+    cutoutVersion: number;
   }
 ): Promise<void> {
   await updateDoc(lookDocRef(uid, lookId), {
@@ -228,6 +237,7 @@ function normalizeLookDoc(id: string, raw: Partial<LookRecord>): SavedLook {
     cutoutStoragePath: raw.cutoutStoragePath ?? null,
     cutoutThumbnailUrl: raw.cutoutThumbnailUrl ?? null,
     cutoutThumbnailStoragePath: raw.cutoutThumbnailStoragePath ?? null,
+    cutoutVersion: raw.cutoutVersion ?? null,
     originalFileName: raw.originalFileName ?? "",
     takenAt: raw.takenAt ?? null,
     latitude: raw.latitude ?? null,

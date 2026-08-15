@@ -16,7 +16,7 @@ import {
   type DbWeatherStatus,
 } from "@/lib/lookStore";
 import { generateThumbnail } from "@/lib/thumbnail";
-import { generateCutout } from "@/lib/cutout";
+import { generateCutout, CURRENT_CUTOUT_VERSION } from "@/lib/cutout";
 import { cacheKeyOf, putCachedLook } from "@/lib/lookCache";
 
 type WeatherStage = "no-date" | "no-gps" | "done" | "error";
@@ -122,6 +122,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
       let cutoutStoragePath: string | null = null;
       let cutoutThumbnailUrl: string | null = null;
       let cutoutThumbnailStoragePath: string | null = null;
+      let cutoutVersion: number | null = null;
       if (cutout) {
         try {
           const [detail, thumb] = await Promise.all([
@@ -132,6 +133,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
           cutoutStoragePath = detail.cutoutStoragePath;
           cutoutThumbnailUrl = thumb.cutoutThumbnailUrl;
           cutoutThumbnailStoragePath = thumb.cutoutThumbnailStoragePath;
+          cutoutVersion = CURRENT_CUTOUT_VERSION;
         } catch {
           // 업로드 실패 - 원본/썸네일로 폴백하며 계속 진행
         }
@@ -160,6 +162,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         cutoutStoragePath,
         cutoutThumbnailUrl,
         cutoutThumbnailStoragePath,
+        cutoutVersion,
         originalFileName: item.file.name,
         takenAt: meta.dateTimeOriginal ? Timestamp.fromDate(meta.dateTimeOriginal) : null,
         latitude: meta.latitude,
@@ -182,6 +185,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         thumbnailUrl,
         cutoutUrl,
         cutoutThumbnailUrl,
+        cutoutVersion,
         takenAtMs: meta.dateTimeOriginal ? meta.dateTimeOriginal.getTime() : null,
         latitude: meta.latitude,
         longitude: meta.longitude,

@@ -23,6 +23,8 @@ export type CachedLook = {
   cutoutUrl: string | null;
   /** 목록/캘린더/홈에서 원본보다 우선 쓰는 누끼 썸네일 (요구사항 8의 우선순위 1~2번). */
   cutoutThumbnailUrl: string | null;
+  /** /dev/cutout-migrate가 재생성 대상을 고르는 기준. */
+  cutoutVersion: number | null;
   takenAtMs: number | null;
   latitude: number | null;
   longitude: number | null;
