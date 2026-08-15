@@ -29,6 +29,18 @@ function resolveBackHref(searchParams: URLSearchParams): string {
     return "/history";
   }
   if (from === "home") return "/";
+  if (from === "looks") {
+    // "기온으로 찾기" 검색 결과에서 들어왔다면 검색 조건까지 그대로 복원한다.
+    if (searchParams.get("mode") === "weather") {
+      const max = searchParams.get("max");
+      const min = searchParams.get("min");
+      const rain = searchParams.get("rain") ?? "any";
+      if (max !== null && min !== null) {
+        return `/looks?mode=weather&max=${encodeURIComponent(max)}&min=${encodeURIComponent(min)}&rain=${encodeURIComponent(rain)}`;
+      }
+    }
+    return "/looks";
+  }
   return "/looks";
 }
 

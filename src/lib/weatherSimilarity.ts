@@ -160,3 +160,84 @@ export function findLooksNearThisDate(
   candidates.sort((a, b) => (a.distance !== b.distance ? a.distance - b.distance : b.takenAtMs - a.takenAtMs));
   return candidates.slice(0, limit).map((c) => c.look);
 }
+
+// --- 기온으로 과거 룩 검색 (전체 룩의 "기온으로 찾기" 전용) -----------------
+// 홈의 예보 기반 추천과는 별개 기능이다 - 사용자가 직접 입력한 목표
+// 최고/최저기온만 보고, 계절/날짜 근접도는 의도적으로 넣지 않는다("계절보다
+// 입력한 기온 자체가 중요하다"). 강수 조건은 점수에 섞지 않고 순수 필터로만
+// 쓴다. gaussianScore/isRainyWeather 등 위에서 이미 쓰던 계산을 그대로
+// 재사용한다.
+
+export type TemperatureRainFilter = "any" | "no-rain" | "rain";
+
+export type TemperatureSearchQuery = {
+  targetMax: number;
+  targetMin: number;
+  rain: TemperatureRainFilter;
+};
+
+const TEMP_SEARCH_INITIAL_RANGE_C = 5;
+const TEMP_SEARCH_EXPANDED_RANGE_C = 10;
+const TEMP_SEARCH_MIN_RESULTS = 3;
+const TEMP_SEARCH_MAX_RESULTS = 40;
+
+type TempSearchableLook = DisplayLook & {
+  weather: DbWeather & { tempMax: number; tempMin: number };
+  takenAt: NonNullable<DisplayLook["takenAt"]>;
+};
+
+function hasUsableWeatherForTempSearch(look: DisplayLook): look is TempSearchableLook {
+  return (
+    look.weatherStatus === "success" &&
+    !!look.weather &&
+    look.weather.tempMax !== null &&
+    look.weather.tempMin !== null &&
+    !!look.takenAt
+  );
+}
+
+/** 최고/최저기온만 보는 유사도 - 최고/최저 비중을 동일하게 유지하고, 계절/날짜 근접도는 넣지 않는다. */
+function computeTemperatureMatchScore(targetMax: number, targetMin: number, lookMax: number, lookMin: number): number {
+  const maxScore = gaussianScore(Math.abs(targetMax - lookMax), TEMP_SIGMA_C);
+  const minScore = gaussianScore(Math.abs(targetMin - lookMin), TEMP_SIGMA_C);
+  return (maxScore + minScore) / 2;
+}
+
+/**
+ * 사용자가 직접 입력한 목표 기온과 가장 비슷했던 과거 룩을 찾는다. weather가
+ * 정상이고 최고/최저기온이 둘 다 있는 룩만 대상이고, 강수 조건이
+ * "any"(상관없음)가 아니면 그 조건에 맞는 룩만 먼저 걸러낸다.
+ * ±5℃ 범위에서 결과가 3개 미만이면 ±10℃로 자동으로 넓히고, 그래도 하나도
+ * 없으면 강수 필터를 통과한 후보 전체를 가까운 순서로 보여준다 - "결과
+ * 없음" hard cutoff를 기본으로 두지 않는다.
+ */
+export function searchLooksByTemperature(looks: DisplayLook[], query: TemperatureSearchQuery): DisplayLook[] {
+  const usable = looks.filter(hasUsableWeatherForTempSearch);
+
+  const rainFiltered =
+    query.rain === "any"
+      ? usable
+      : usable.filter(
+          (look) =>
+            isRainyWeather(look.weather.precipitation, look.weather.weatherCode) === (query.rain === "rain")
+        );
+
+  const withinRange = (look: TempSearchableLook, range: number) =>
+    Math.abs(look.weather.tempMax - query.targetMax) <= range &&
+    Math.abs(look.weather.tempMin - query.targetMin) <= range;
+
+  let candidates = rainFiltered.filter((l) => withinRange(l, TEMP_SEARCH_INITIAL_RANGE_C));
+  if (candidates.length < TEMP_SEARCH_MIN_RESULTS) {
+    candidates = rainFiltered.filter((l) => withinRange(l, TEMP_SEARCH_EXPANDED_RANGE_C));
+  }
+  if (candidates.length === 0) {
+    candidates = rainFiltered;
+  }
+
+  const scored = candidates.map((look) => ({
+    look,
+    score: computeTemperatureMatchScore(query.targetMax, query.targetMin, look.weather.tempMax, look.weather.tempMin),
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, TEMP_SEARCH_MAX_RESULTS).map((s) => s.look);
+}
