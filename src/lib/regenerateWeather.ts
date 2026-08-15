@@ -3,6 +3,7 @@
 import { Timestamp } from "firebase/firestore";
 import { fetchHistoricalWeatherForLook } from "@/lib/weather";
 import { updateLookWeatherFields, type DbWeather } from "@/lib/lookStore";
+import { toUsableDate } from "@/lib/format";
 
 /**
  * 이미 저장된 룩의 takenAt(+ 있으면 GPS)로 Open-Meteo 과거 날씨를 다시
@@ -18,25 +19,29 @@ import { updateLookWeatherFields, type DbWeather } from "@/lib/lookStore";
  * 보낸다 - 이전에 실패했던 조회를 사용자가 명시적으로 재시도하는 경로이므로,
  * 캐시에 남아있을 수 있는 예전 결과를 절대 재사용하지 않는다.
  *
- * takenAt이 없으면 애초에 조회할 날짜가 없어 조회가 불가능하므로 호출부가
+ * 촬영일이 없으면 애초에 조회할 날짜가 없어 조회가 불가능하므로 호출부가
  * 먼저 걸러야 한다(상세 화면에서 버튼 자체를 숨김) - 이 함수는 그 가정을
- * 다시 한번 방어적으로 검사만 하고 그대로 throw한다.
+ * 다시 한번 방어적으로 검사만 하고 그대로 throw한다. 날짜 판별은
+ * toUsableDate()로 하는데, 상세 화면 상단의 촬영일 표시와 완전히 같은
+ * 기준이다 - "날짜는 화면에 뜨는데 날씨 쪽은 날짜가 없다고 한다" 같은
+ * 불일치를 막기 위해 두 곳이 서로 다른 로직으로 각자 판단하지 않는다.
  */
 export async function regenerateLookWeather(
   uid: string,
   look: { id: string; takenAt: Timestamp | null; latitude: number | null; longitude: number | null }
 ): Promise<void> {
-  if (!look.takenAt) {
+  const takenAtDate = toUsableDate(look.takenAt);
+  if (!takenAtDate) {
     throw new Error("촬영일 정보가 없어 날씨를 조회할 수 없어요");
   }
 
   const { result, locationSource } = await fetchHistoricalWeatherForLook(
     look.latitude,
     look.longitude,
-    look.takenAt.toDate(),
+    takenAtDate,
     {
       forceRefresh: true,
-      logContext: { lookId: look.id, takenAt: look.takenAt.toDate().toISOString() },
+      logContext: { lookId: look.id, takenAt: takenAtDate.toISOString() },
     }
   );
 

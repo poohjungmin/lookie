@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
-import { formatDateOnly } from "@/lib/format";
+import { formatDateOnly, toUsableDate } from "@/lib/format";
 import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { regenerateLookWeather } from "@/lib/regenerateWeather";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
@@ -70,6 +70,15 @@ function LookDetailPageInner() {
       </div>
     );
   }
+
+  // 상세 화면 최상단 촬영일 표시와 날씨 "다시 조회" 가능 여부 판단이
+  // 서로 다른 기준을 쓰면(예: 날짜는 뜨는데 날씨 쪽은 날짜가 없다고 하는 등)
+  // 불일치가 생긴다 - 두 곳 모두 이 값 하나만 쓰게 한다. takenAt이
+  // weatherStatus 필드가 도입되기 전/GPS 요구사항이 바뀌기 전에 저장된
+  // 예전 룩("missing_metadata"로 굳어있지만 실제로는 유효한 촬영일이 있는
+  // 경우)도 여기서 함께 구제된다 - weatherStatus 값 자체가 아니라 실제
+  // 촬영일 존재 여부로 재조회 가능 여부를 판단하기 때문.
+  const takenAtDate = toUsableDate(look.takenAt);
 
   // 자동 정규화가 사람을 잘못 판단한 예외 사진을 사용자가 직접 보정하는
   // 유일한 경로. 원본을 먼저 불러온 뒤 크롭 모달을 띄우고, 사용자가 고른
@@ -206,7 +215,7 @@ function LookDetailPageInner() {
 
       <div className="px-5 pt-6 sm:px-6">
         <p className="text-lg font-semibold text-neutral-900">
-          {look.takenAt ? formatDateOnly(look.takenAt.toDate()) : "촬영일 정보 없음"}
+          {takenAtDate ? formatDateOnly(takenAtDate) : "촬영일 정보 없음"}
         </p>
 
         <div className="mt-4 rounded-2xl bg-neutral-50 p-5">
@@ -238,11 +247,17 @@ function LookDetailPageInner() {
           ) : (
             <div>
               <p className="text-sm text-neutral-400">
-                {look.weatherStatus === "failed"
-                  ? "날씨 조회에 실패했어요"
+                {takenAtDate
+                  ? look.weatherStatus === "failed"
+                    ? "날씨 조회에 실패했어요"
+                    : "아직 날씨 정보가 없어요"
                   : "날씨 조회에 필요한 촬영일 정보가 없어요."}
               </p>
-              {look.weatherStatus === "failed" && look.takenAt && (
+              {/* weatherStatus 값과 무관하게, 화면 상단에 뜬 것과 같은 기준의
+                  유효한 촬영일(takenAtDate)이 있으면 다시 조회할 수 있게 한다 -
+                  예전에 GPS가 없어 "missing_metadata"로 굳어버린 룩도 촬영일만
+                  있으면 이 버튼으로 서울 기준 날씨를 복구할 수 있다. */}
+              {takenAtDate && (
                 <>
                   <button
                     type="button"
