@@ -123,21 +123,58 @@ export function applyPersonalCorrection(
   return { x, y, width: newWidth, height: newHeight };
 }
 
+/** computePersonalizedAutoCrop이 내부적으로 거치는 단계값들 - 디버그 로그 전용. */
+export type PersonalizationDiagnostics = {
+  totalSamples: number;
+  similarSamples: number;
+  minRequired: number;
+  strength: number;
+  correction: CorrectionDelta | null;
+  result: CropRatioBox | null;
+};
+
+/**
+ * computePersonalizedAutoCrop과 완전히 같은 계산이지만, 중간 단계값(유사
+ * 샘플 개수, 실제 사용한 correction 등)을 함께 돌려준다 - 디버그 로그
+ * (cutout.ts)가 이 값들을 그대로 출력한다. 계산 로직/문턱값/전략은 아래
+ * computePersonalizedAutoCrop과 한 글자도 다르지 않다.
+ */
+export function computePersonalizedAutoCropWithDiagnostics(
+  autoCropRatio: CropRatioBox,
+  imageIsPortrait: boolean,
+  allRecords: ManualCropCorrectionRecord[]
+): PersonalizationDiagnostics {
+  const similar = filterSimilarCorrections(allRecords, { imageIsPortrait, autoCropRatio });
+  const base = {
+    totalSamples: allRecords.length,
+    similarSamples: similar.length,
+    minRequired: MIN_CORRECTION_SAMPLES,
+    strength: PERSONAL_CORRECTION_STRENGTH,
+  };
+
+  if (similar.length < MIN_CORRECTION_SAMPLES) {
+    return { ...base, correction: null, result: null };
+  }
+  const correction = medianCorrection(similar);
+  if (!correction) {
+    return { ...base, correction: null, result: null };
+  }
+  const result = applyPersonalCorrection(autoCropRatio, correction, PERSONAL_CORRECTION_STRENGTH);
+  return { ...base, correction, result };
+}
+
 /**
  * 자동 crop이 "의심스러울" 때만 호출하는 진입점. 비슷한 촬영 패턴의 기록이
  * MIN_CORRECTION_SAMPLES개 미만이면 보정하지 않고 null(= 자동 결과 그대로
- * 사용)을 돌려준다.
+ * 사용)을 돌려준다. computePersonalizedAutoCropWithDiagnostics의 결과만
+ * 반환하는 얇은 wrapper - 실제 계산은 완전히 동일하다.
  */
 export function computePersonalizedAutoCrop(
   autoCropRatio: CropRatioBox,
   imageIsPortrait: boolean,
   allRecords: ManualCropCorrectionRecord[]
 ): CropRatioBox | null {
-  const similar = filterSimilarCorrections(allRecords, { imageIsPortrait, autoCropRatio });
-  if (similar.length < MIN_CORRECTION_SAMPLES) return null;
-  const correction = medianCorrection(similar);
-  if (!correction) return null;
-  return applyPersonalCorrection(autoCropRatio, correction, PERSONAL_CORRECTION_STRENGTH);
+  return computePersonalizedAutoCropWithDiagnostics(autoCropRatio, imageIsPortrait, allRecords).result;
 }
 
 // --- 자동 결과가 "의심스러운지" 판정 ----------------------------------------
@@ -168,4 +205,75 @@ export function isAutoResultSuspicious(quality: AutoResultQuality): boolean {
   const bboxAspect = quality.bboxRatio.width / Math.max(quality.bboxRatio.height, 1e-6);
   if (bboxAspect > SUSPICIOUS_BBOX_ASPECT_THRESHOLD) return true;
   return false;
+}
+
+// --- 디버그 로그 -------------------------------------------------------------
+// 개인화 heuristic이 실제로 동작하는지 콘솔에서 눈으로 확인하기 위한 용도.
+// 여기서 로그를 찍는다고 위의 계산/문턱값/전략이 바뀌지는 않는다 - 이미
+// 계산된 값을 그대로 출력만 한다.
+
+function fmtRatio(box: CropRatioBox): string {
+  return `x=${box.x.toFixed(4)}\ny=${box.y.toFixed(4)}\nwidth=${box.width.toFixed(4)}\nheight=${box.height.toFixed(4)}`;
+}
+
+export type PersonalCropLogInput = {
+  totalSamples: number;
+  /** null이면 이번 실행에서 suspicious 여부 자체를 계산하지 않았다는 뜻(정상 경로에서는 발생하지 않음). */
+  suspicious: boolean | null;
+  diagnostics: PersonalizationDiagnostics | null;
+  autoCropRatio: CropRatioBox;
+  finalCropRatio: CropRatioBox;
+  applied: boolean;
+};
+
+/**
+ * 새 누끼 생성/재생성마다 개인화 heuristic이 실제로 어떻게 판단했는지
+ * [personal-crop] prefix로 콘솔에 남긴다. production에서는 아무 것도
+ * 출력하지 않는다(사용자 경험에 영향 없음) - 이 가드는 호출부에서도
+ * 한 번 더 걸지만, 여기서도 최종 방어선으로 둔다.
+ */
+export function logPersonalCropDecision(input: PersonalCropLogInput): void {
+  if (process.env.NODE_ENV === "production") return;
+
+  const { totalSamples, suspicious, diagnostics, autoCropRatio, finalCropRatio, applied } = input;
+  const similarSamples = diagnostics?.similarSamples ?? 0;
+
+  const reason = applied
+    ? null
+    : totalSamples === 0
+      ? "no correction data"
+      : suspicious === false
+        ? "auto crop considered normal"
+        : similarSamples < MIN_CORRECTION_SAMPLES
+          ? "not enough similar samples"
+          : "no correction data";
+
+  const lines = [
+    "[personal-crop]",
+    `total correction samples: ${totalSamples}`,
+    `similar correction samples: ${similarSamples}`,
+    `minimum required: ${MIN_CORRECTION_SAMPLES}`,
+    `suspicious auto crop: ${suspicious ?? "n/a"}`,
+    `personal correction applied: ${applied}`,
+  ];
+  if (!applied && reason) lines.push(`reason: ${reason}`);
+  if (applied) lines.push(`correction strength: ${PERSONAL_CORRECTION_STRENGTH}`);
+
+  lines.push("", "auto crop:", fmtRatio(autoCropRatio));
+
+  if (applied && diagnostics?.correction) {
+    const c = diagnostics.correction;
+    lines.push(
+      "",
+      "personal correction:",
+      `centerXDeltaRatio=${c.centerXDeltaRatio.toFixed(4)}`,
+      `centerYDeltaRatio=${c.centerYDeltaRatio.toFixed(4)}`,
+      `widthRatio=${c.widthRatio.toFixed(4)}`,
+      `heightRatio=${c.heightRatio.toFixed(4)}`
+    );
+  }
+
+  lines.push("", "final crop:", fmtRatio(finalCropRatio));
+
+  console.log(lines.join("\n"));
 }

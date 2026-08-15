@@ -3,11 +3,19 @@
 import { removeBackground } from "@imgly/background-removal";
 import { downscaleImage } from "@/lib/downscaleImage";
 import {
-  computePersonalizedAutoCrop,
+  computePersonalizedAutoCropWithDiagnostics,
   isAutoResultSuspicious,
+  logPersonalCropDecision,
   type CropRatioBox,
   type ManualCropCorrectionRecord,
+  type PersonalizationDiagnostics,
 } from "@/lib/cropCorrectionMath";
+
+// 이 함수는 여러 곳(자동 업로드/재업로드, /dev/cutout-migrate)에서 사진마다
+// 반복 호출되므로, 디버그 로그를 위한 추가 연산(개인화 기록이 0개일 때도
+// suspicious를 계산하는 것 등)은 개발 환경에서만 켠다 - production 처리
+// 속도/사용자 경험에는 전혀 영향이 없다.
+const isPersonalCropDebugEnabled = process.env.NODE_ENV !== "production";
 
 // /dev/cutout-compare 비교 결과 @imgly/background-removal(AGPL-3.0, ISNet
 // 기반)이 MediaPipe Selfie Segmenter보다 신발·머리카락·옷 경계 품질이
@@ -363,9 +371,13 @@ async function normalizeCutout(
 
       // 8) 자동 결과가 의심스러운지 먼저 판정한다 (padding 없는 원래 bbox
       // 기준 - 아래에서 최종 계산할 때와 같은 스케일 공식을 재사용).
+      // personalCorrections가 있을 때만(정상 production 경로) 계산하는 게
+      // 원래 로직이다 - 개발 환경에서는 기록이 0개일 때도 "왜 적용 안
+      // 됐는지"를 로그로 보여주기 위해 이 블록에 한 번 더 들어간다. 두
+      // 경우 모두 실제 crop 판단/적용 로직은 전혀 다르지 않다.
       let effectiveBBoxRatio = rawBBoxRatio;
       let personalizationApplied = false;
-      if (personalCorrections && personalCorrections.length > 0) {
+      if ((personalCorrections && personalCorrections.length > 0) || (isPersonalCropDebugEnabled && personalCorrections)) {
         const padX0 = bboxWidth * CROP_PADDING_RATIO;
         const cropW0 =
           Math.min(bitmap.width, bbox.maxX + 1 + padX0) - Math.max(0, bbox.minX - padX0);
@@ -382,12 +394,26 @@ async function normalizeCutout(
           targetBodyHeightRatio: BODY_HEIGHT_RATIO,
         });
 
-        if (suspicious) {
-          const corrected = computePersonalizedAutoCrop(rawBBoxRatio, imageIsPortrait, personalCorrections);
-          if (corrected) {
-            effectiveBBoxRatio = corrected;
+        // 실제 개인화 적용 여부/방법은 원래 로직 그대로: 의심스럽고 기록이
+        // 있을 때만 시도한다.
+        let diagnostics: PersonalizationDiagnostics | null = null;
+        if (suspicious && personalCorrections && personalCorrections.length > 0) {
+          diagnostics = computePersonalizedAutoCropWithDiagnostics(rawBBoxRatio, imageIsPortrait, personalCorrections);
+          if (diagnostics.result) {
+            effectiveBBoxRatio = diagnostics.result;
             personalizationApplied = true;
           }
+        }
+
+        if (isPersonalCropDebugEnabled) {
+          logPersonalCropDecision({
+            totalSamples: personalCorrections?.length ?? 0,
+            suspicious,
+            diagnostics,
+            autoCropRatio: rawBBoxRatio,
+            finalCropRatio: effectiveBBoxRatio,
+            applied: personalizationApplied,
+          });
         }
       }
 

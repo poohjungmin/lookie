@@ -133,7 +133,15 @@ function LookDetailPageInner() {
           manualCropRatio,
         }).catch(() => {
           // 개인화 기록 저장 실패는 조용히 무시 - 누끼 재생성은 이미 성공했다.
+          // 실패 이유 자체는 saveManualCropCorrection 내부에서 이미
+          // [manual-crop-correction] 로그로 남겼다(개발 환경 한정).
         });
+      } else if (process.env.NODE_ENV !== "production") {
+        console.log(
+          ["[manual-crop-correction]", "saved: false", `lookId: ${look.id}`, "autoCrop available: false", "reason: lastAutoCropRatio missing"].join(
+            "\n"
+          )
+        );
       }
 
       // 목록 전체를 다시 훑지 않고 이 룩 하나만 즉시 최신 상태로 갱신한다 -

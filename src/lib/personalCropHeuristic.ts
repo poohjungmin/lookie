@@ -133,7 +133,31 @@ export async function saveManualCropCorrection(
     createdAt: serverTimestamp(),
   };
 
-  await addDoc(correctionsCollection(uid), docData);
+  let docRef;
+  try {
+    docRef = await addDoc(correctionsCollection(uid), docData);
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.log(
+        [
+          "[manual-crop-correction]",
+          "saved: false",
+          `lookId: ${lookId}`,
+          "autoCrop available: true",
+          `reason: ${err instanceof Error ? err.message : String(err)}`,
+        ].join("\n")
+      );
+    }
+    throw err;
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log(
+      ["[manual-crop-correction]", "saved: true", `lookId: ${lookId}`, "autoCrop available: true", `correction document id: ${docRef.id}`].join(
+        "\n"
+      )
+    );
+  }
 
   // 이번 세션에서 바로 다음 사진부터 반영되도록 캐시에도 즉시 추가한다
   // (요구사항 8: 새 수동 수정값도 다시 누적해서 참고).
