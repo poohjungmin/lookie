@@ -44,9 +44,27 @@ const WEATHER_CODE_LABELS: Record<number, string> = {
   99: "강한 우박 동반 뇌우",
 };
 
-function describeWeatherCode(code: number | null): string {
+export function describeWeatherCode(code: number | null): string {
   if (code === null || code === undefined) return "정보 없음";
   return WEATHER_CODE_LABELS[code] ?? `날씨 코드 ${code}`;
+}
+
+/**
+ * WMO weather code를 의미 있는 그룹으로 묶는다. 오늘/과거 날씨의 "날씨
+ * 상태" 유사도는 코드를 그대로 숫자로 비교하지 않고 이 그룹으로 비교한다
+ * (예: 61번 "약한 비"와 65번 "강한 비"는 코드값은 멀지만 그룹은 같다).
+ */
+export type WeatherGroup = "clear" | "cloudy" | "rain" | "snow" | "other";
+
+export function weatherGroupOf(code: number | null): WeatherGroup {
+  if (code === null || code === undefined) return "other";
+  if (code === 0 || code === 1) return "clear";
+  if (code === 2 || code === 3 || code === 45 || code === 48) return "cloudy";
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code === 95 || code === 96 || code === 99) {
+    return "rain";
+  }
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "snow";
+  return "other";
 }
 
 function toDateString(date: Date): string {
