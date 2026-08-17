@@ -110,12 +110,12 @@ export default function BottomNav() {
     <nav
       className="fixed inset-x-0 bottom-0 z-20 border-t border-neutral-100 bg-white/95 backdrop-blur"
       // safe-area-inset(레이아웃.tsx의 viewport-fit: cover와 함께 있어야
-      // env()가 0이 아닌 실제 인셋으로 계산된다) 위에 여유 공간을 조금 더
-      // 얹어, 메뉴가 홈 인디케이터에 완전히 딱 붙지는 않게 한다. 이 추가
-      // 여백을 10px -> 4px로 줄여 safe-area는 그대로 유지하면서 인디케이터
-      // 와의 빈 공간만 좁혔다(6px 축소) - safe-area 값 자체가 이미 홈
-      // 인디케이터를 피하는 인셋이므로 겹칠 일은 없다.
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 4px)" }}
+      // env()가 0이 아닌 실제 인셋으로 계산된다) 위에 추가로 얹던 여백(10px,
+      // 이후 4px)을 완전히 제거했다 - 이 값 자체가 이미 홈 인디케이터를
+      // 피하는 데 필요한 만큼만 정확히 확보해 주므로, 그 위에 더 얹을수록
+      // 인디케이터와의 빈 공간만 불필요하게 커진다. 아래로 붙는 정도는
+      // NavLink의 py-2(위/아래 8px 대칭 패딩)가 대신 결정한다.
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       <div className="mx-auto flex max-w-2xl items-center justify-around">
         <NavLink href="/" label="홈" active={pathname === "/"}>
