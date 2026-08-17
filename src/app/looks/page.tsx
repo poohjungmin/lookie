@@ -12,7 +12,12 @@ import {
   type BulkWeatherRecoveryProgress,
   type BulkWeatherRecoveryResult,
 } from "@/lib/bulkWeatherRecovery";
-import { searchLooksByTemperature, type TemperatureRainFilter } from "@/lib/weatherSimilarity";
+import {
+  filterLooksByRain,
+  searchLooksByTemperature,
+  sortLooksByTakenAtDesc,
+  type TemperatureRainFilter,
+} from "@/lib/weatherSimilarity";
 import {
   DRESS_LEVEL_FILTERS,
   dressLevelFilterLabel,
@@ -22,10 +27,29 @@ import {
 } from "@/lib/dressLevel";
 
 const RAIN_OPTIONS: { value: TemperatureRainFilter; label: string }[] = [
-  { value: "any", label: "상관없음" },
+  { value: "any", label: "전체" },
   { value: "no-rain", label: "비 안 옴" },
   { value: "rain", label: "비 옴" },
 ];
+
+/** 검색 결과 상단 제목 - 실제로 적용된 조건만 자연스럽게 이어붙인다. */
+function searchResultTitle(query: {
+  targetMax: number | null;
+  targetMin: number | null;
+  rain: TemperatureRainFilter;
+  dressLevel: DressLevelFilter;
+}): string {
+  const extra: string[] = [];
+  if (query.rain !== "any") extra.push(query.rain === "rain" ? "비 온 날" : "비 안 온 날");
+  if (query.dressLevel !== "all") extra.push(dressLevelFilterLabel(query.dressLevel));
+
+  const hasTemp = query.targetMax !== null && query.targetMin !== null;
+  if (hasTemp) {
+    const base = `최고 ${query.targetMax}° / 최저 ${query.targetMin}°와 비슷했던 룩`;
+    return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
+  }
+  return extra.length > 0 ? `${extra.join(" · ")} 룩` : "검색 결과";
+}
 
 function LooksPageInner() {
   const { user, looks, syncing, patchLookWeather } = useApp();
@@ -98,41 +122,84 @@ function LooksPageInner() {
     };
   }, [menuOpen]);
 
+  // 기온은 이제 필수가 아니다 - max/min이 URL에 둘 다 있을 때만 기온 조건이
+  // "있는" 것으로 본다(하나만 있는 URL은 애초에 handleSearch가 만들지
+  // 않지만, 방어적으로 여기서도 둘 다 있을 때만 인정한다).
   const activeQuery = useMemo(() => {
     if (!isWeatherSearchMode) return null;
-    const max = Number(searchParams.get("max"));
-    const min = Number(searchParams.get("min"));
-    if (!Number.isFinite(max) || !Number.isFinite(min)) return null;
+    const maxRaw = searchParams.get("max");
+    const minRaw = searchParams.get("min");
+    const max = maxRaw !== null ? Number(maxRaw) : null;
+    const min = minRaw !== null ? Number(minRaw) : null;
+    const hasTemp = max !== null && min !== null && Number.isFinite(max) && Number.isFinite(min);
     const rainParam = (searchParams.get("rain") as TemperatureRainFilter | null) ?? "any";
     const dressParam = parseDressLevelFilter(searchParams.get("dress"));
-    return { targetMax: max, targetMin: min, rain: rainParam, dressLevel: dressParam };
+    return {
+      targetMax: hasTemp ? max : null,
+      targetMin: hasTemp ? min : null,
+      rain: rainParam,
+      dressLevel: dressParam,
+    };
   }, [isWeatherSearchMode, searchParams]);
 
   // looks는 이미 local-first로 로드된 배열 그대로 - 검색 때문에 Firestore를
-  // 다시 조회하지 않는다. 꾸밈레벨은 기온 similarity 계산 "전"에 후보를
-  // 거르는 사전 필터일 뿐, searchLooksByTemperature 내부 로직/점수는 전혀
-  // 바꾸지 않는다: 전체 룩 -> 꾸밈레벨로 후보 필터 -> 기존 기온 similarity.
+  // 다시 조회하지 않는다. 비/꾸밈레벨은 기온 similarity 계산 "전"에 후보를
+  // 거르는 사전 필터일 뿐 점수에 관여하지 않는다 - searchLooksByTemperature
+  // 자체는 손대지 않고, 기온 조건이 있을 때만 호출한다: 전체 룩 -> 비 필터
+  // -> 꾸밈레벨 필터 -> (기온 있으면) 기존 기온 similarity, (없으면) 촬영일 최신순.
   const searchResults = useMemo(() => {
     if (!activeQuery) return [];
-    const candidates = filterLooksByDressLevel(looks, activeQuery.dressLevel);
-    return searchLooksByTemperature(candidates, activeQuery);
+    const rainFiltered = filterLooksByRain(looks, activeQuery.rain);
+    const candidates = filterLooksByDressLevel(rainFiltered, activeQuery.dressLevel);
+    if (activeQuery.targetMax !== null && activeQuery.targetMin !== null) {
+      return searchLooksByTemperature(candidates, {
+        targetMax: activeQuery.targetMax,
+        targetMin: activeQuery.targetMin,
+        rain: activeQuery.rain,
+      });
+    }
+    return sortLooksByTakenAtDesc(candidates);
   }, [looks, activeQuery]);
 
   function handleSearch() {
-    const maxNum = Number(maxInput);
-    const minNum = Number(minInput);
-    if (maxInput.trim() === "" || minInput.trim() === "" || !Number.isFinite(maxNum) || !Number.isFinite(minNum)) {
-      setValidationError("최고기온과 최저기온을 입력해주세요.");
+    const maxTrim = maxInput.trim();
+    const minTrim = minInput.trim();
+    const maxProvided = maxTrim !== "";
+    const minProvided = minTrim !== "";
+
+    // 최고/최저 중 하나만 입력한 경우만 오류 - 둘 다 비우면 "기온 조건 없음"으로 취급한다.
+    if (maxProvided !== minProvided) {
+      setValidationError("최고기온과 최저기온을 모두 입력해 주세요.");
       return;
     }
-    if (maxNum <= minNum) {
-      setValidationError("최고기온은 최저기온보다 높게 입력해 주세요.");
+
+    let hasTemp = false;
+    if (maxProvided && minProvided) {
+      const maxNum = Number(maxTrim);
+      const minNum = Number(minTrim);
+      if (!Number.isFinite(maxNum) || !Number.isFinite(minNum)) {
+        setValidationError("최고기온과 최저기온을 모두 입력해 주세요.");
+        return;
+      }
+      if (maxNum <= minNum) {
+        setValidationError("최고기온은 최저기온보다 높게 입력해 주세요.");
+        return;
+      }
+      hasTemp = true;
+    }
+
+    // 기온/비/꾸밈레벨 어떤 조건도 고르지 않았다면 오류 없이 그냥 검색을
+    // 닫고 기존 전체 룩 화면으로 돌아간다.
+    if (!hasTemp && rain === "any" && dressFilter === "all") {
+      setValidationError(null);
+      setSearchOpen(false);
+      if (isWeatherSearchMode) router.push(pathname);
       return;
     }
+
     setValidationError(null);
-    router.push(
-      `${pathname}?mode=weather&max=${encodeURIComponent(maxInput)}&min=${encodeURIComponent(minInput)}&rain=${rain}&dress=${dressFilter}`
-    );
+    const tempQuery = hasTemp ? `max=${encodeURIComponent(maxTrim)}&min=${encodeURIComponent(minTrim)}&` : "";
+    router.push(`${pathname}?mode=weather&${tempQuery}rain=${rain}&dress=${dressFilter}`);
   }
 
   function closeSearch() {
@@ -142,9 +209,13 @@ function LooksPageInner() {
   }
 
   const searchLinkQuery = activeQuery
-    ? `from=looks&mode=weather&max=${encodeURIComponent(String(activeQuery.targetMax))}&min=${encodeURIComponent(
-        String(activeQuery.targetMin)
-      )}&rain=${activeQuery.rain}&dress=${activeQuery.dressLevel}`
+    ? `from=looks&mode=weather&${
+        activeQuery.targetMax !== null && activeQuery.targetMin !== null
+          ? `max=${encodeURIComponent(String(activeQuery.targetMax))}&min=${encodeURIComponent(
+              String(activeQuery.targetMin)
+            )}&`
+          : ""
+      }rain=${activeQuery.rain}&dress=${activeQuery.dressLevel}`
     : "";
 
   return (
@@ -153,9 +224,9 @@ function LooksPageInner() {
         <p className="text-xs font-medium tracking-wide text-neutral-400">
           LOOKIE
         </p>
-        {/* "전체 룩 ···"와 "기온으로 찾기"의 세로 중심을 같은 줄에 맞추기
-            위해 이 행 하나를 items-center flex row로 묶는다(LOOKIE 라벨은
-            그 위에 별도 줄로 유지). */}
+        {/* "전체 룩 ···"와 "룩 찾기"의 세로 중심을 같은 줄에 맞추기 위해
+            이 행 하나를 items-center flex row로 묶는다(LOOKIE 라벨은 그
+            위에 별도 줄로 유지). */}
         <div className="mt-1 flex items-center justify-between">
           <div className="flex items-center gap-0.5">
             <h1 className="text-xl font-semibold text-neutral-900">
@@ -186,49 +257,64 @@ function LooksPageInner() {
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setSearchOpen((v) => !v)}
-            className="shrink-0 rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
-          >
-            {searchOpen ? "닫기" : "🌡️ 기온으로 찾기"}
-          </button>
+          {/* 검색 패널을 펼치는 진입점은 눈에 띄는 pill로, 접을 때(닫기)는
+              같은 자리에서 보조 텍스트 액션으로 가볍게 바뀐다 - border/배경
+              없이 충분한 터치 영역만 확보한다. */}
+          {searchOpen ? (
+            <button
+              type="button"
+              onClick={() => setSearchOpen(false)}
+              className="shrink-0 px-2 py-2 text-xs font-medium text-neutral-500"
+            >
+              닫기
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSearchOpen(true)}
+              className="shrink-0 rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
+            >
+              룩 찾기
+            </button>
+          )}
         </div>
       </header>
 
-      {/* 기온 검색 패널 - 상단에서 펼쳐지는 방식. 숫자 키패드가 뜨도록
-          inputMode="decimal"을 쓰고, 소수점도 허용한다. */}
+      {/* 룩 찾기 패널 - 기온/비/꾸밈레벨 중 필요한 조건만 골라 검색하는
+          화면이다("기온 입력 폼"이 아니라 여러 조건 중 선택). 숫자 키패드가
+          뜨도록 inputMode="decimal"을 쓰고, 소수점도 허용한다. */}
       {searchOpen && (
         <section className="mb-6 rounded-2xl border border-neutral-100 p-4">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className="text-xs text-neutral-500">최고기온</span>
-              <div className="mt-1 flex items-center rounded-lg border border-neutral-300 px-3 py-2">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={maxInput}
-                  onChange={(e) => setMaxInput(e.target.value)}
-                  placeholder="28"
-                  className="w-full text-sm text-neutral-900 outline-none"
-                />
-                <span className="text-sm text-neutral-400">°C</span>
-              </div>
-            </label>
-            <label className="block">
-              <span className="text-xs text-neutral-500">최저기온</span>
-              <div className="mt-1 flex items-center rounded-lg border border-neutral-300 px-3 py-2">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={minInput}
-                  onChange={(e) => setMinInput(e.target.value)}
-                  placeholder="21"
-                  className="w-full text-sm text-neutral-900 outline-none"
-                />
-                <span className="text-sm text-neutral-400">°C</span>
-              </div>
-            </label>
+          <div>
+            <span className="text-xs text-neutral-500">기온</span>
+            <div className="mt-1.5 grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-[11px] text-neutral-400">최고</span>
+                <div className="mt-1 flex items-center rounded-lg bg-neutral-50 px-3 py-1.5">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={maxInput}
+                    onChange={(e) => setMaxInput(e.target.value)}
+                    className="w-full text-sm text-neutral-900 outline-none"
+                  />
+                  <span className="text-sm text-neutral-400">°C</span>
+                </div>
+              </label>
+              <label className="block">
+                <span className="text-[11px] text-neutral-400">최저</span>
+                <div className="mt-1 flex items-center rounded-lg bg-neutral-50 px-3 py-1.5">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={minInput}
+                    onChange={(e) => setMinInput(e.target.value)}
+                    className="w-full text-sm text-neutral-900 outline-none"
+                  />
+                  <span className="text-sm text-neutral-400">°C</span>
+                </div>
+              </label>
+            </div>
           </div>
 
           <div className="mt-3">
@@ -282,7 +368,7 @@ function LooksPageInner() {
             onClick={handleSearch}
             className="mt-4 w-full rounded-xl bg-neutral-900 py-2.5 text-center text-sm font-medium text-white"
           >
-            비슷한 룩 찾기
+            룩 찾기
           </button>
         </section>
       )}
@@ -291,7 +377,7 @@ function LooksPageInner() {
         <section>
           <div className="flex items-center justify-between px-2">
             <h2 className="text-sm font-medium text-neutral-800">
-              최고 {activeQuery.targetMax}° / 최저 {activeQuery.targetMin}°와 비슷했던 룩
+              {searchResultTitle(activeQuery)}
             </h2>
             <button
               type="button"

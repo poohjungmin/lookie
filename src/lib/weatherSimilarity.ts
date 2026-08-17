@@ -44,6 +44,28 @@ function isRainyWeather(precipitation: number | null, code: number | null): bool
   return (precipitation !== null && precipitation > 0.1) || group === "rain" || group === "snow";
 }
 
+/**
+ * 비 조건 사전 필터(전체 룩 검색 전용) - "기온으로 찾기"에서 이미 쓰던
+ * isRainyWeather 판정을 그대로 재사용한다. weather가 없는 룩은 "전체"일
+ * 때만 통과시킨다(비/맑음을 판정할 데이터 자체가 없으므로).
+ */
+export function filterLooksByRain(looks: DisplayLook[], rain: TemperatureRainFilter): DisplayLook[] {
+  if (rain === "any") return looks;
+  return looks.filter((look) => {
+    if (look.weatherStatus !== "success" || !look.weather) return false;
+    return isRainyWeather(look.weather.precipitation, look.weather.weatherCode) === (rain === "rain");
+  });
+}
+
+/** 기온 조건 없이(비/꾸밈레벨만으로) 검색할 때 쓰는 정렬 - 촬영일 최신순. */
+export function sortLooksByTakenAtDesc(looks: DisplayLook[]): DisplayLook[] {
+  return [...looks].sort((a, b) => {
+    const at = a.takenAt ? a.takenAt.toMillis() : 0;
+    const bt = b.takenAt ? b.takenAt.toMillis() : 0;
+    return bt - at;
+  });
+}
+
 /** 두 날짜 사이의 "일" 단위 순환 거리 - 연도는 무시하고 월/일만 비교한다 (최대 ~182.5일). */
 export function dateProximityDays(a: Date, b: Date): number {
   const dayOfYear = (d: Date) => {

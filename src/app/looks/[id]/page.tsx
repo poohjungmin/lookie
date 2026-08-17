@@ -32,15 +32,19 @@ function resolveBackHref(searchParams: URLSearchParams): string {
   }
   if (from === "home") return "/";
   if (from === "looks") {
-    // "기온으로 찾기" 검색 결과에서 들어왔다면 검색 조건(꾸밈레벨 포함)까지 그대로 복원한다.
+    // "룩 찾기" 검색 결과에서 들어왔다면 검색 조건(기온은 있을 때만, 비/
+    // 꾸밈레벨은 항상)을 그대로 복원한다 - 기온 없이 비/꾸밈레벨만으로도
+    // 검색이 가능하므로 max/min 둘 다 있을 때만 그 부분을 포함시킨다.
     if (searchParams.get("mode") === "weather") {
       const max = searchParams.get("max");
       const min = searchParams.get("min");
       const rain = searchParams.get("rain") ?? "any";
       const dress = searchParams.get("dress") ?? "all";
-      if (max !== null && min !== null) {
-        return `/looks?mode=weather&max=${encodeURIComponent(max)}&min=${encodeURIComponent(min)}&rain=${encodeURIComponent(rain)}&dress=${encodeURIComponent(dress)}`;
-      }
+      const tempQuery =
+        max !== null && min !== null
+          ? `max=${encodeURIComponent(max)}&min=${encodeURIComponent(min)}&`
+          : "";
+      return `/looks?mode=weather&${tempQuery}rain=${encodeURIComponent(rain)}&dress=${encodeURIComponent(dress)}`;
     }
     return "/looks";
   }

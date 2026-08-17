@@ -140,17 +140,20 @@ export default function HomePage() {
           <h2 className="text-sm font-medium text-neutral-800">
             {recommendationTitle(selectedDay, selectedDayIndex)}
           </h2>
-          <div className="mt-3 flex gap-2">
+          {/* 추천 룩 이미지가 먼저 눈에 들어와야 하므로 필터 존재감은
+              최소화한다 - 기온으로 찾기 패널의 칩보다도 한 단계 더 가볍게
+              (높이/패딩 축소, 미선택 테두리를 더 연하게). */}
+          <div className="mt-2.5 flex gap-1.5">
             {DRESS_LEVEL_FILTERS.map((f) => (
               <button
                 key={f}
                 type="button"
                 onClick={() => setDressFilter(f)}
                 className={
-                  "rounded-full border px-3 py-1.5 text-xs font-medium " +
+                  "rounded-full border px-2.5 py-1 text-[11px] font-medium " +
                   (dressFilter === f
                     ? "border-neutral-900 bg-neutral-900 text-white"
-                    : "border-neutral-300 text-neutral-600")
+                    : "border-neutral-200 text-neutral-500")
                 }
               >
                 {dressLevelFilterLabel(f)}
@@ -172,9 +175,11 @@ export default function HomePage() {
       )}
 
       {/* 이맘때 입었던 룩 - 데이터가 있을 때만 노출, 위 섹션과 중복되지
-          않는다. 예보 카드를 넘겨도 바뀌지 않고 항상 실제 오늘 기준이다. */}
+          않는다. 예보 카드를 넘겨도 바뀌지 않고 항상 실제 오늘 기준이다.
+          위 추천 섹션과는 다른 섹션이라는 구분은 유지하되, 간격을 조금
+          좁혀 두 섹션이 덜 멀게 느껴지도록 한다. */}
       {nearbyDateLooks.length > 0 && (
-        <section className="mt-10">
+        <section className="mt-6">
           <h2 className="text-sm font-medium text-neutral-800">
             이맘때 입었던 룩
           </h2>
