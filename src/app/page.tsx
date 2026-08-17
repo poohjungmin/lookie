@@ -29,7 +29,7 @@ function parseForecastDate(dateStr: string): Date {
 /** 선택된 예보 날짜에 맞춰 추천 섹션 제목을 자연스러운 문구로 바꾼다. */
 function recommendationTitle(day: ForecastDay, index: number): string {
   if (index === 0) return "오늘과 비슷한 날씨에 입었던 룩";
-  if (index === 1) return "내일 날씨에 입기 좋았던 룩";
+  if (index === 1) return "내일과 비슷한 날씨에 입었던 룩";
   const date = parseForecastDate(day.date);
   return `${date.getMonth() + 1}월 ${date.getDate()}일 날씨와 비슷했던 룩`;
 }
