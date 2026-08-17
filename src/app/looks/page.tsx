@@ -149,12 +149,15 @@ function LooksPageInner() {
 
   return (
     <div className="mx-auto max-w-2xl px-3 pb-10 pt-10 sm:px-5">
-      <header className="mb-6 flex items-start justify-between px-2">
-        <div>
-          <p className="text-xs font-medium tracking-wide text-neutral-400">
-            LOOKIE
-          </p>
-          <div className="mt-1 flex items-center gap-0.5">
+      <header className="mb-6 px-2">
+        <p className="text-xs font-medium tracking-wide text-neutral-400">
+          LOOKIE
+        </p>
+        {/* "전체 룩 ···"와 "기온으로 찾기"의 세로 중심을 같은 줄에 맞추기
+            위해 이 행 하나를 items-center flex row로 묶는다(LOOKIE 라벨은
+            그 위에 별도 줄로 유지). */}
+        <div className="mt-1 flex items-center justify-between">
+          <div className="flex items-center gap-0.5">
             <h1 className="text-xl font-semibold text-neutral-900">
               전체 룩
             </h1>
@@ -183,14 +186,14 @@ function LooksPageInner() {
               )}
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setSearchOpen((v) => !v)}
+            className="shrink-0 rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
+          >
+            {searchOpen ? "닫기" : "🌡️ 기온으로 찾기"}
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setSearchOpen((v) => !v)}
-          className="mt-1 shrink-0 rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
-        >
-          {searchOpen ? "닫기" : "🌡️ 기온으로 찾기"}
-        </button>
       </header>
 
       {/* 기온 검색 패널 - 상단에서 펼쳐지는 방식. 숫자 키패드가 뜨도록
