@@ -174,29 +174,31 @@ export default function DressLevelPage() {
         )}
       </div>
 
+      {/* 저장 결과는 사진/버튼보다 눈에 덜 띄는 보조 정보여야 한다 - 결과
+          문구는 연한 회색, "실행 취소"만 살짝 더 진하게(밑줄 없음). */}
       {undo && (
-        <div className="mt-4 flex items-center justify-center gap-1.5 text-xs text-neutral-500">
-          <span>{undo.label}로 정했어요</span>
-          <button
-            type="button"
-            onClick={handleUndo}
-            className="font-medium text-neutral-800 underline underline-offset-2"
-          >
-            방금 선택 취소
+        <p className="mt-4 text-center text-xs text-neutral-400">
+          {undo.label}로 정했어요{" "}
+          <button type="button" onClick={handleUndo} className="font-medium text-neutral-600">
+            · 실행 취소
           </button>
-        </div>
+        </p>
       )}
       {error && <p className="mt-3 text-center text-xs text-red-600">{error}</p>}
 
       {/* 세 버튼 중 하나를 누르는 순간 바로 다음 룩으로 넘어간다 - 각 단계가
-          무엇을 의미하는지는 사용자 본인의 기준이므로 별도 설명은 붙이지 않는다. */}
-      <div className="mt-5 grid grid-cols-3 gap-3">
+          무엇을 의미하는지는 사용자 본인의 기준이므로 별도 설명은 붙이지 않는다.
+          사진이 화면의 중심이어야 하므로 버튼은 굵은 outline 없이 연한 회색
+          배경만으로 가볍게 표시하고, 선택 즉시 다음 룩으로 넘어가기 때문에
+          selected 상태를 유지할 필요 없이 탭 순간에만 반전(검정 배경/흰
+          글씨)되는 짧은 피드백만 준다. */}
+      <div className="mt-4 grid grid-cols-3 gap-2">
         {DRESS_LEVELS.map((level) => (
           <button
             key={level}
             type="button"
             onClick={() => handlePick(level)}
-            className="rounded-2xl border-2 border-neutral-900 py-7 text-base font-semibold text-neutral-900 active:bg-neutral-900 active:text-white"
+            className="rounded-2xl bg-neutral-100 py-[18px] text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-900 active:text-white"
           >
             {dressLevelLabel(level)}
           </button>
