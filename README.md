@@ -1,4 +1,8 @@
-# LOOKIE
+<p align="center">
+  <img src="./docs/images/app-icon.png" width="120" alt="LOOKIE App Icon" />
+</p>
+
+<h1 align="center">LOOKIE</h1>
 
 > **과거의 나에게서 오늘 입을 옷을 찾는 개인 룩 아카이브**
 
