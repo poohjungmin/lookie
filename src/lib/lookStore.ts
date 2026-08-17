@@ -54,6 +54,14 @@ export function toDbWeather(result: WeatherResult, locationSource: WeatherLocati
   };
 }
 
+/**
+ * 사용자가 주관적으로 매기는 꾸밈레벨 - 객관적 패션 평가가 아니라 "이날
+ * 내가 얼마나 꾸몄는지"를 빠르게 3단계로만 분류하는 값. 별점/소수점 세부
+ * 점수는 의도적으로 두지 않는다. UI에는 이 내부 코드가 아니라
+ * dressLevel.ts의 한글 라벨(안꾸/꾸안꾸/꾸꾸꾸)만 노출한다.
+ */
+export type DressLevel = "casual" | "effortless" | "dressed";
+
 export type LookRecord = {
   imageUrl: string;
   storagePath: string;
@@ -100,7 +108,7 @@ export type LookRecord = {
   weatherStatus: DbWeatherStatus;
 
   category: null;
-  dressLevel: null;
+  dressLevel: DressLevel | null;
   aiAnalysis: null;
 
   fingerprint: string;
@@ -258,6 +266,24 @@ export async function updateLookWeatherFields(
   });
 }
 
+/**
+ * 이 룩의 꾸밈레벨만 다시 쓴다 (사용자가 직접 매기는 3단계 분류).
+ * original/thumbnail/cutout/weather/takenAt/GPS/lookId/createdAt 등 다른
+ * 필드는 절대 건드리지 않는다 - updateLookWeatherFields/updateLookCutoutFields와
+ * 동일한 "필드 하나만 patch" 패턴. updatedAt만 다시 찍어서 local-first
+ * 캐시가 이 변경을 감지하도록 한다.
+ */
+export async function updateLookDressLevel(
+  uid: string,
+  lookId: string,
+  dressLevel: DressLevel | null
+): Promise<void> {
+  await updateDoc(lookDocRef(uid, lookId), {
+    dressLevel,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function saveLookRecord(
   uid: string,
   lookId: string,
@@ -328,7 +354,9 @@ function normalizeLookDoc(id: string, raw: Partial<LookRecord>): SavedLook {
     weather: raw.weather ? { ...raw.weather, locationSource: raw.weather.locationSource ?? "exif" } : null,
     weatherStatus: raw.weatherStatus ?? "missing_metadata",
     category: null,
-    dressLevel: null,
+    // 예전 문서(이 필드가 생기기 전 저장된 룩)는 dressLevel 자체가 없으므로
+    // 자연스럽게 "미분류"로 취급된다.
+    dressLevel: raw.dressLevel ?? null,
     aiAnalysis: null,
     fingerprint: raw.fingerprint ?? id,
     createdAt: (raw.createdAt ?? null) as SavedLook["createdAt"],

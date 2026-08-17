@@ -10,6 +10,8 @@ import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { regenerateLookWeather } from "@/lib/regenerateWeather";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import { saveManualCropCorrection } from "@/lib/personalCropHeuristic";
+import { updateLookDressLevel, type DressLevel } from "@/lib/lookStore";
+import { DRESS_LEVELS, dressLevelLabel } from "@/lib/dressLevel";
 import ManualCutoutCropModal, { type ManualCropResult } from "@/components/ManualCutoutCropModal";
 import LookDetailGallery from "@/components/LookDetailGallery";
 
@@ -48,10 +50,15 @@ function LookDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, looks, syncing, deleteLook, refreshSingleLook, patchLookWeather } = useApp();
+  const { user, looks, syncing, deleteLook, refreshSingleLook, patchLookWeather, patchLookDressLevel } =
+    useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // 꾸밈레벨: 상세 화면에서는 값을 바꿔도 다음 룩으로 넘어가지 않는다
+  // (전용 분류 화면 /looks/dress-level과의 유일한 차이).
+  const [dressLevelError, setDressLevelError] = useState<string | null>(null);
 
   // 누끼 수정: "누끼 수정" 탭 -> 원본 로딩 -> 자유 크롭 모달 -> 크롭 결과로 재생성.
   const [cropLoading, setCropLoading] = useState(false);
@@ -190,6 +197,22 @@ function LookDetailPageInner() {
     }
   }
 
+  // 선택 즉시 반영(optimistic) 후 Firestore에 비동기로 patch한다 - dressLevel/
+  // updatedAt 외 다른 필드는 건드리지 않는다(updateLookDressLevel). 이미 같은
+  // 값이면 아무 것도 하지 않는다.
+  async function handleSetDressLevel(level: DressLevel) {
+    if (!look || look.dressLevel === level) return;
+    setDressLevelError(null);
+    patchLookDressLevel(look.id, level);
+    try {
+      await updateLookDressLevel(user.uid, look.id, level);
+    } catch (err) {
+      setDressLevelError(
+        `저장하지 못했어요: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   async function handleConfirmDelete() {
     if (!look) return;
     setDeleting(true);
@@ -316,9 +339,39 @@ function LookDetailPageInner() {
           <p className="mt-2 text-center text-xs text-red-600">실패: {cropError}</p>
         )}
 
-        {/* 향후 카테고리·꾸밈 정도 표시 공간 (Vision AI 붙기 전까지는 비워둠) */}
+        {/* 꾸밈레벨 - 객관적 평가가 아니라 사용자 본인 기준의 3단계 분류.
+            현재 값에 해당하는 버튼만 선택 표시하고, 다른 버튼을 누르면 즉시
+            수정한다(전용 분류 화면과 달리 다음 룩으로 넘어가지 않음). */}
+        <div className="mt-4">
+          <p className="text-sm font-medium text-neutral-800">꾸밈레벨</p>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {DRESS_LEVELS.map((level) => {
+              const selected = look.dressLevel === level;
+              return (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => handleSetDressLevel(level)}
+                  className={
+                    "rounded-xl border py-3 text-sm font-medium " +
+                    (selected
+                      ? "border-neutral-900 bg-neutral-900 text-white"
+                      : "border-neutral-300 bg-white text-neutral-700")
+                  }
+                >
+                  {dressLevelLabel(level)}
+                </button>
+              );
+            })}
+          </div>
+          {dressLevelError && (
+            <p className="mt-2 text-xs text-red-600">{dressLevelError}</p>
+          )}
+        </div>
+
+        {/* 향후 카테고리 표시 공간 (Vision AI 붙기 전까지는 비워둠) */}
         <div className="mt-4 rounded-2xl border border-dashed border-neutral-200 p-5 text-center text-xs text-neutral-300">
-          카테고리 · 꾸밈 정도 (준비 중)
+          카테고리 (준비 중)
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import type { DbWeather, DbWeatherStatus } from "@/lib/lookStore";
+import type { DbWeather, DbWeatherStatus, DressLevel } from "@/lib/lookStore";
 import type { CropRatioBox } from "@/lib/cropCorrectionMath";
 
 const DB_NAME = "lookie-cache";
@@ -33,6 +33,9 @@ export type CachedLook = {
   longitude: number | null;
   weatherStatus: DbWeatherStatus;
   weather: DbWeather | null;
+  /** 사용자가 매긴 꾸밈레벨(안꾸/꾸안꾸/꾸꾸꾸). 이 필드가 생기기 전 캐시된
+      항목에는 없을 수 있으므로 읽을 때 항상 `?? null`로 다뤄야 한다. */
+  dressLevel: DressLevel | null;
   /** Firestore updatedAt(없으면 createdAt)을 ms로 변환한 값. 동기화 diff 기준. */
   updatedAtMs: number;
   thumbBlob: Blob | null;

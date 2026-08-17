@@ -37,8 +37,16 @@ export default function AppShell({ children }: { children: ReactNode }) {
     setDevLog((prev) => [...prev.slice(-49), `${timestamp()}  ${message}`]);
   }, []);
 
-  const { looks, syncing, offline, refresh, refreshSingleLook, patchLookWeather, deleteLook } =
-    useLocalFirstLooks(user ? user.uid : null, log);
+  const {
+    looks,
+    syncing,
+    offline,
+    refresh,
+    refreshSingleLook,
+    patchLookWeather,
+    patchLookDressLevel,
+    deleteLook,
+  } = useLocalFirstLooks(user ? user.uid : null, log);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -114,6 +122,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         refreshLooks: refresh,
         refreshSingleLook,
         patchLookWeather,
+        patchLookDressLevel,
         deleteLook,
         signOutUser,
       }}

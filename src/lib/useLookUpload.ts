@@ -190,6 +190,7 @@ export function useLookUpload(uid: string, onSaved: () => void) {
         cutoutThumbnailUrl,
         cutoutVersion,
         lastAutoCropRatio: cutout?.autoCrop?.bboxRatio ?? null,
+        dressLevel: null,
         takenAtMs: meta.dateTimeOriginal ? meta.dateTimeOriginal.getTime() : null,
         latitude: meta.latitude,
         longitude: meta.longitude,

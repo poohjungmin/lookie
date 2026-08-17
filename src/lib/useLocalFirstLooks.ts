@@ -9,6 +9,7 @@ import {
   type SavedLook,
   type DbWeather,
   type DbWeatherStatus,
+  type DressLevel,
 } from "@/lib/lookStore";
 import {
   cacheKeyOf,
@@ -42,6 +43,7 @@ function savedLookToCacheEntry(uid: string, look: SavedLook): CachedLook {
     longitude: look.longitude,
     weatherStatus: look.weatherStatus,
     weather: look.weather,
+    dressLevel: look.dressLevel,
     updatedAtMs: updatedAtMs(look),
     thumbBlob: null,
     thumbType: null,
@@ -75,7 +77,9 @@ function cacheEntryToDisplayLook(entry: CachedLook, thumbSrc: string): DisplayLo
     weather: entry.weather,
     weatherStatus: entry.weatherStatus,
     category: null,
-    dressLevel: null,
+    // 이 필드가 생기기 전 캐시된 항목(entry.dressLevel === undefined)은
+    // 자연스럽게 미분류로 취급한다.
+    dressLevel: entry.dressLevel ?? null,
     aiAnalysis: null,
     fingerprint: entry.lookId,
     createdAt: Timestamp.fromMillis(entry.updatedAtMs) as SavedLook["createdAt"],
@@ -414,6 +418,23 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     [publishFromCacheMap]
   );
 
+  // dressLevel만 바뀐 룩 하나의 로컬 캐시를 가볍게 갱신한다. patchLookWeather와
+  // 완전히 같은 패턴 - 이미지 Blob은 절대 건드리지 않는다. 꾸밈레벨 분류
+  // 화면이 Firestore 응답을 기다리지 않고 선택 즉시 다음 룩으로 넘어갈 수
+  // 있는 것은 이 함수가 동기적으로 화면(looks state)부터 갱신하기 때문이다
+  // - 실제 Firestore patch(updateLookDressLevel)는 호출부가 비동기로 별도 실행한다.
+  const patchLookDressLevel = useCallback(
+    (lookId: string, dressLevel: DressLevel | null) => {
+      const existing = cacheMap.current.get(lookId);
+      if (!existing) return;
+      const updated: CachedLook = { ...existing, dressLevel, updatedAtMs: Date.now() };
+      cacheMap.current.set(lookId, updated);
+      void putCachedLook(updated);
+      publishFromCacheMap();
+    },
+    [publishFromCacheMap]
+  );
+
   return {
     looks,
     initialSource,
@@ -422,6 +443,7 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     refresh: syncNow,
     refreshSingleLook,
     patchLookWeather,
+    patchLookDressLevel,
     deleteLook,
   };
 }

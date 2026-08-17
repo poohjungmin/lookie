@@ -3,7 +3,7 @@
 import { createContext, useContext } from "react";
 import type { User } from "firebase/auth";
 import type { DisplayLook } from "@/lib/useLocalFirstLooks";
-import type { DbWeather, DbWeatherStatus } from "@/lib/lookStore";
+import type { DbWeather, DbWeatherStatus, DressLevel } from "@/lib/lookStore";
 
 export type AppContextValue = {
   user: User;
@@ -17,6 +17,8 @@ export type AppContextValue = {
   refreshSingleLook: (lookId: string) => Promise<void>;
   /** weather만 바뀐 룩 하나를 이미지 재다운로드 없이 가볍게 갱신한다 (날씨 개별/일괄 재조회 직후). */
   patchLookWeather: (lookId: string, weather: DbWeather | null, weatherStatus: DbWeatherStatus) => void;
+  /** 꾸밈레벨만 바뀐 룩 하나를 이미지 재다운로드 없이 가볍게 갱신한다 (분류 화면/상세 화면에서 선택 즉시). */
+  patchLookDressLevel: (lookId: string, dressLevel: DressLevel | null) => void;
   /** Firestore 문서 + Storage 파일 + 로컬 캐시 + 화면 상태까지 완전히 지운다. */
   deleteLook: (lookId: string) => Promise<void>;
   signOutUser: () => void;

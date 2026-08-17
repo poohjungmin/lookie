@@ -123,13 +123,21 @@ function LooksPageInner() {
             전체 룩
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={() => setSearchOpen((v) => !v)}
-          className="mt-1 shrink-0 rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
-        >
-          {searchOpen ? "닫기" : "🌡️ 기온으로 찾기"}
-        </button>
+        <div className="mt-1 flex shrink-0 flex-col items-end gap-2">
+          <button
+            type="button"
+            onClick={() => setSearchOpen((v) => !v)}
+            className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
+          >
+            {searchOpen ? "닫기" : "🌡️ 기온으로 찾기"}
+          </button>
+          <Link
+            href="/looks/dress-level"
+            className="rounded-full border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700"
+          >
+            꾸밈레벨 정하기
+          </Link>
+        </div>
       </header>
 
       {/* 기온 검색 패널 - 상단에서 펼쳐지는 방식. 숫자 키패드가 뜨도록
