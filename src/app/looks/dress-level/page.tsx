@@ -68,17 +68,24 @@ export default function DressLevelPage() {
   const classifiedCount = total - queue.length;
 
   // Undo history는 한 단계면 충분하다 - 새로 하나를 고르면 이전 undo는 사라진다.
-  const [undo, setUndo] = useState<{ lookId: string; label: string } | null>(null);
+  const [undo, setUndo] = useState<{ lookId: string; level: DressLevel; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const imageSrc = useBigCutoutSrc(current);
 
-  async function persist(lookId: string, level: DressLevel | null) {
+  // Firestore 저장이 실패하면 optimistic으로 먼저 반영해둔 local/캐시 값을
+  // "이 patch 이전에 실제로 저장돼 있던 값"(previous)으로 되돌린다 - 화면상
+  // 선택을 그대로 유지한 채 끝내면 Firestore와 local state가 어긋난 채로
+  // 남는다. previous가 null이면(= 방금 새로 분류한 경우) 그 룩은 미분류
+  // 큐에 자동으로 다시 나타난다. undo 배너가 이 룩을 가리키고 있었다면
+  // 더는 되돌릴 게 없으므로 함께 정리한다.
+  async function persist(lookId: string, level: DressLevel | null, previous: DressLevel | null) {
     try {
       await updateLookDressLevel(user.uid, lookId, level);
     } catch (err) {
-      // 로컬/캐시 반영은 이미 끝났으니 조용히 유실되지 않는다 - 사용자에게만 알린다.
-      setError(`저장하지 못했어요: ${err instanceof Error ? err.message : String(err)}`);
+      patchLookDressLevel(lookId, previous);
+      setUndo((prev) => (prev?.lookId === lookId ? null : prev));
+      setError(`저장하지 못했어요 · ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -89,17 +96,17 @@ export default function DressLevelPage() {
     const lookId = current.id;
     setError(null);
     patchLookDressLevel(lookId, level);
-    setUndo({ lookId, label: dressLevelLabel(level) });
-    void persist(lookId, level);
+    setUndo({ lookId, level, label: dressLevelLabel(level) });
+    void persist(lookId, level, null);
   }
 
   function handleUndo() {
     if (!undo) return;
-    const { lookId } = undo;
+    const { lookId, level } = undo;
     setError(null);
     patchLookDressLevel(lookId, null);
     setUndo(null);
-    void persist(lookId, null);
+    void persist(lookId, null, level);
   }
 
   if (syncing && total === 0) {

@@ -32,13 +32,14 @@ function resolveBackHref(searchParams: URLSearchParams): string {
   }
   if (from === "home") return "/";
   if (from === "looks") {
-    // "기온으로 찾기" 검색 결과에서 들어왔다면 검색 조건까지 그대로 복원한다.
+    // "기온으로 찾기" 검색 결과에서 들어왔다면 검색 조건(꾸밈레벨 포함)까지 그대로 복원한다.
     if (searchParams.get("mode") === "weather") {
       const max = searchParams.get("max");
       const min = searchParams.get("min");
       const rain = searchParams.get("rain") ?? "any";
+      const dress = searchParams.get("dress") ?? "all";
       if (max !== null && min !== null) {
-        return `/looks?mode=weather&max=${encodeURIComponent(max)}&min=${encodeURIComponent(min)}&rain=${encodeURIComponent(rain)}`;
+        return `/looks?mode=weather&max=${encodeURIComponent(max)}&min=${encodeURIComponent(min)}&rain=${encodeURIComponent(rain)}&dress=${encodeURIComponent(dress)}`;
       }
     }
     return "/looks";
@@ -199,16 +200,20 @@ function LookDetailPageInner() {
 
   // 선택 즉시 반영(optimistic) 후 Firestore에 비동기로 patch한다 - dressLevel/
   // updatedAt 외 다른 필드는 건드리지 않는다(updateLookDressLevel). 이미 같은
-  // 값이면 아무 것도 하지 않는다.
+  // 값이면 아무 것도 하지 않는다. 저장이 실패하면 화면상 선택을 그대로 두지
+  // 않고 이 patch 이전 값(previous)으로 되돌려, Firestore와 local state가
+  // 어긋난 채로 남지 않게 한다.
   async function handleSetDressLevel(level: DressLevel) {
     if (!look || look.dressLevel === level) return;
+    const previous = look.dressLevel;
     setDressLevelError(null);
     patchLookDressLevel(look.id, level);
     try {
       await updateLookDressLevel(user.uid, look.id, level);
     } catch (err) {
+      patchLookDressLevel(look.id, previous);
       setDressLevelError(
-        `저장하지 못했어요: ${err instanceof Error ? err.message : String(err)}`
+        `저장하지 못했어요 · ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }

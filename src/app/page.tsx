@@ -7,6 +7,12 @@ import { rankLooksByWeatherSimilarity, findLooksNearThisDate } from "@/lib/weath
 import RecommendedLookCard from "@/components/RecommendedLookCard";
 import WeeklyForecastCarousel from "@/components/WeeklyForecastCarousel";
 import type { ForecastDay } from "@/lib/currentWeather";
+import {
+  DRESS_LEVEL_FILTERS,
+  dressLevelFilterLabel,
+  filterLooksByDressLevel,
+  type DressLevelFilter,
+} from "@/lib/dressLevel";
 
 const SIMILAR_LOOKS_LIMIT = 5;
 const NEARBY_DATE_LOOKS_LIMIT = 6;
@@ -52,6 +58,12 @@ export default function HomePage() {
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
   const selectedDay = forecastDays[selectedDayIndex] ?? null;
 
+  // 날씨 기반 추천 전용 꾸밈레벨 필터 - "이맘때 입었던 룩"에는 영향을 주지
+  // 않는다. 예보 날짜를 넘겨도(오늘->내일->모레) 유지되고, 홈에 새로
+  // 진입하면(컴포넌트 재마운트) 다시 "전체"로 시작한다 - URL에 담아
+  // 영구히 보존할 필요는 없다는 요구사항.
+  const [dressFilter, setDressFilter] = useState<DressLevelFilter>("all");
+
   // 홈 화면이 떠 있는 동안은 "실제 오늘"을 고정한다 - "이맘때 입었던 룩"은
   // 혼란을 줄이기 위해 항상 이 실제 오늘 기준으로 유지하고, 예보 카드를
   // 넘겨도 바뀌지 않는다(날씨 기반 추천만 선택된 날짜를 따라간다).
@@ -60,12 +72,16 @@ export default function HomePage() {
   // looks는 이미 local-first로 로드되어 있는 배열 그대로 - 추천 때문에
   // Firestore를 다시 조회하지 않는다. 각 항목이 산술 연산 몇 개뿐이라
   // 룩이 1,000개 이상이어도 이 계산 자체는 무시할 만한 비용이고, 선택된
-  // 날짜가 바뀔 때만 다시 계산된다(useMemo).
+  // 날짜나 꾸밈레벨 필터가 바뀔 때만 다시 계산된다(useMemo). 꾸밈레벨은
+  // rankLooksByWeatherSimilarity(기존 similarity 계산) "전"에 후보를 거르는
+  // 사전 필터일 뿐 점수에는 관여하지 않는다: 전체 looks -> 꾸밈레벨 필터
+  // -> 기존 weather similarity -> 상위 N개.
   const similarLooks = useMemo(() => {
     if (!selectedDay) return [];
     const targetDate = selectedDayIndex === 0 ? today : parseForecastDate(selectedDay.date);
-    return rankLooksByWeatherSimilarity(looks, selectedDay, targetDate, SIMILAR_LOOKS_LIMIT);
-  }, [looks, selectedDay, selectedDayIndex, today]);
+    const candidates = filterLooksByDressLevel(looks, dressFilter);
+    return rankLooksByWeatherSimilarity(candidates, selectedDay, targetDate, SIMILAR_LOOKS_LIMIT);
+  }, [looks, selectedDay, selectedDayIndex, today, dressFilter]);
 
   const nearbyDateLooks = useMemo(() => {
     const excludeIds = new Set(similarLooks.map((l) => l.id));
@@ -117,28 +133,41 @@ export default function HomePage() {
 
       {/* 날씨 기반 추천 - 룩기의 핵심 화면. 새 코디를 생성하는 게 아니라
           실제로 입었던 룩을 다시 보여준다. 제목/후보 모두 위에서 선택된
-          예보 날짜를 따라간다. */}
-      {selectedDay && similarLooks.length > 0 && (
+          예보 날짜를 따라간다. 꾸밈레벨 필터는 이 섹션에만 적용되고
+          "이맘때 입었던 룩"에는 영향을 주지 않는다. */}
+      {selectedDay && (similarLooks.length > 0 || hasAnyWeatherTaggedLook) && (
         <section className="mt-10">
           <h2 className="text-sm font-medium text-neutral-800">
             {recommendationTitle(selectedDay, selectedDayIndex)}
           </h2>
-          <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
-            {similarLooks.map((look) => (
-              <RecommendedLookCard key={look.id} look={look} />
+          <div className="mt-3 flex gap-2">
+            {DRESS_LEVEL_FILTERS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setDressFilter(f)}
+                className={
+                  "rounded-full border px-3 py-1.5 text-xs font-medium " +
+                  (dressFilter === f
+                    ? "border-neutral-900 bg-neutral-900 text-white"
+                    : "border-neutral-300 text-neutral-600")
+                }
+              >
+                {dressLevelFilterLabel(f)}
+              </button>
             ))}
           </div>
-        </section>
-      )}
-
-      {selectedDay && hasAnyWeatherTaggedLook && similarLooks.length === 0 && (
-        <section className="mt-10">
-          <h2 className="text-sm font-medium text-neutral-800">
-            {recommendationTitle(selectedDay, selectedDayIndex)}
-          </h2>
-          <p className="mt-3 text-xs text-neutral-300">
-            아직 이 날씨와 비슷한 기록이 없어요
-          </p>
+          {similarLooks.length > 0 ? (
+            <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
+              {similarLooks.map((look) => (
+                <RecommendedLookCard key={look.id} look={look} />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-xs text-neutral-300">
+              {dressFilter === "all" ? "아직 이 날씨와 비슷한 기록이 없어요" : "조건에 맞는 룩이 없어요."}
+            </p>
+          )}
         </section>
       )}
 
