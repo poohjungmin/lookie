@@ -91,7 +91,10 @@ function NavLink({
     <Link
       href={href}
       className={
-        "flex w-16 flex-col items-center gap-1 py-2 text-[11px] " +
+        // 지난번 줄인 여백(4px)의 2배(8px)만큼 아래쪽만 더 줄인다 - 위쪽
+        // 패딩(pt-2, 상단 border와의 탭 터치 간격)은 그대로 두고, 콘텐츠
+        // 아래쪽 여백만 없애 라벨이 safe-area 바로 위에 붙게 한다.
+        "flex w-16 flex-col items-center gap-1 pt-2 pb-0 text-[11px] " +
         (active ? "text-neutral-900" : "text-neutral-400")
       }
     >
