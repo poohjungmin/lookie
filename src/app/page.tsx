@@ -1,22 +1,17 @@
 "use client";
 
-import { useDressLevels } from "@/lib/dressLevel";
-
 import { useMemo, useState } from "react";
 import { useApp } from "@/lib/AppContext";
 import { useWeeklyForecast } from "@/lib/useWeeklyForecast";
-import { rankLooksByWeatherSimilarity, findLooksNearThisDate } from "@/lib/weatherSimilarity";
+import { searchLooksByTemperature } from "@/lib/weatherSimilarity";
 import RecommendedLookCard from "@/components/RecommendedLookCard";
 import WeeklyForecastCarousel from "@/components/WeeklyForecastCarousel";
 import type { ForecastDay } from "@/lib/currentWeather";
 import {
+  useDressLevels,
   filterLooksByDressLevel,
   type DressLevelFilter,
 } from "@/lib/dressLevel";
-
-const SIMILAR_LOOKS_LIMIT = 5;
-const NEARBY_DATE_LOOKS_LIMIT = 6;
-const NEARBY_DATE_WINDOW_DAYS = 7;
 
 function todayKorean(): string {
   return new Date().toLocaleDateString("ko-KR", {
@@ -59,44 +54,17 @@ export default function HomePage() {
   const [selectedDayIndex, setSelectedDayIndex] = useState(0);
   const selectedDay = forecastDays[selectedDayIndex] ?? null;
 
-  // 날씨 기반 추천 전용 꾸밈레벨 필터 - "이맘때 입었던 룩"에는 영향을 주지
-  // 않는다. 예보 날짜를 넘겨도(오늘->내일->모레) 유지되고, 홈에 새로
-  // 진입하면(컴포넌트 재마운트) 다시 "전체"로 시작한다 - URL에 담아
-  // 영구히 보존할 필요는 없다는 요구사항.
+  // 카테고리를 유지하면서 선택한 예보의 기온에 맞는 기록을 모두 찾는다.
   const [dressFilter, setDressFilter] = useState<DressLevelFilter>("all");
-
-  // 홈 화면이 떠 있는 동안은 "실제 오늘"을 고정한다 - "이맘때 입었던 룩"은
-  // 혼란을 줄이기 위해 항상 이 실제 오늘 기준으로 유지하고, 예보 카드를
-  // 넘겨도 바뀌지 않는다(날씨 기반 추천만 선택된 날짜를 따라간다).
-  const today = useMemo(() => new Date(), []);
-
-  // looks는 이미 local-first로 로드되어 있는 배열 그대로 - 추천 때문에
-  // Firestore를 다시 조회하지 않는다. 각 항목이 산술 연산 몇 개뿐이라
-  // 룩이 1,000개 이상이어도 이 계산 자체는 무시할 만한 비용이고, 선택된
-  // 날짜나 꾸밈레벨 필터가 바뀔 때만 다시 계산된다(useMemo). 꾸밈레벨은
-  // rankLooksByWeatherSimilarity(기존 similarity 계산) "전"에 후보를 거르는
-  // 사전 필터일 뿐 점수에는 관여하지 않는다: 전체 looks -> 꾸밈레벨 필터
-  // -> 기존 weather similarity -> 상위 N개.
   const similarLooks = useMemo(() => {
-    if (!selectedDay) return [];
-    const targetDate = selectedDayIndex === 0 ? today : parseForecastDate(selectedDay.date);
+    if (!selectedDay || selectedDay.tempMax === null || selectedDay.tempMin === null) return [];
     const candidates = filterLooksByDressLevel(looks, dressFilter);
-    return rankLooksByWeatherSimilarity(candidates, selectedDay, targetDate, SIMILAR_LOOKS_LIMIT);
-  }, [looks, selectedDay, selectedDayIndex, today, dressFilter]);
-
-  const nearbyDateLooks = useMemo(() => {
-    const excludeIds = new Set(similarLooks.map((l) => l.id));
-    return findLooksNearThisDate(looks, today, {
-      windowDays: NEARBY_DATE_WINDOW_DAYS,
-      excludeIds,
-      limit: NEARBY_DATE_LOOKS_LIMIT,
-    });
-  }, [looks, today, similarLooks]);
-
-  const hasAnyWeatherTaggedLook = useMemo(
-    () => looks.some((l) => l.weatherStatus === "success" && l.weather && l.takenAt),
-    [looks]
-  );
+    return searchLooksByTemperature(candidates, {
+      targetMax: selectedDay.tempMax,
+      targetMin: selectedDay.tempMin,
+      rain: "any",
+    }, { expandRange: false, limit: Infinity });
+  }, [looks, selectedDay, dressFilter]);
 
   return (
     <div className="mx-auto max-w-2xl px-5 pb-10 pt-10 sm:px-6">
@@ -132,11 +100,7 @@ export default function HomePage() {
         onSelectIndex={setSelectedDayIndex}
       />
 
-      {/* 날씨 기반 추천 - 룩기의 핵심 화면. 새 코디를 생성하는 게 아니라
-          실제로 입었던 룩을 다시 보여준다. 제목/후보 모두 위에서 선택된
-          예보 날짜를 따라간다. 꾸밈레벨 필터는 이 섹션에만 적용되고
-          "이맘때 입었던 룩"에는 영향을 주지 않는다. */}
-      {selectedDay && (similarLooks.length > 0 || hasAnyWeatherTaggedLook) && (
+      {selectedDay && (
         <section className="mt-10">
           <h2 className="text-sm font-medium text-neutral-800">
             {recommendationTitle(selectedDay, selectedDayIndex)}
@@ -161,8 +125,9 @@ export default function HomePage() {
               </button>
             ))}
           </div>
+          <p className="mt-3 text-xs text-neutral-400">최고·최저기온 각각 ±5℃ 이내 · {similarLooks.length}개</p>
           {similarLooks.length > 0 ? (
-            <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
+            <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-5">
               {similarLooks.map((look) => (
                 <RecommendedLookCard key={look.id} look={look} />
               ))}
@@ -172,23 +137,6 @@ export default function HomePage() {
               {dressFilter === "all" ? "아직 이 날씨와 비슷한 기록이 없어요" : "조건에 맞는 룩이 없어요."}
             </p>
           )}
-        </section>
-      )}
-
-      {/* 이맘때 입었던 룩 - 데이터가 있을 때만 노출, 위 섹션과 중복되지
-          않는다. 예보 카드를 넘겨도 바뀌지 않고 항상 실제 오늘 기준이다.
-          위 추천 섹션과는 다른 섹션이라는 구분은 유지하되, 간격을 조금
-          좁혀 두 섹션이 덜 멀게 느껴지도록 한다. */}
-      {nearbyDateLooks.length > 0 && (
-        <section className="mt-6">
-          <h2 className="text-sm font-medium text-neutral-800">
-            이맘때 입었던 룩
-          </h2>
-          <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
-            {nearbyDateLooks.map((look) => (
-              <RecommendedLookCard key={look.id} look={look} />
-            ))}
-          </div>
         </section>
       )}
 

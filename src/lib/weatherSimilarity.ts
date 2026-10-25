@@ -232,8 +232,14 @@ function computeTemperatureMatchScore(targetMax: number, targetMin: number, look
  * ±5℃ 범위에서 결과가 3개 미만이면 ±10℃로 자동으로 넓히고, 그래도 하나도
  * 없으면 강수 필터를 통과한 후보 전체를 가까운 순서로 보여준다 - "결과
  * 없음" hard cutoff를 기본으로 두지 않는다.
+ * 홈에서는 expandRange: false, limit: Infinity로 ±5℃에 해당하는 룩 전체만
+ * 표시한다. 기존 전체 룩 검색은 기본 확장 범위와 40개 제한을 유지한다.
  */
-export function searchLooksByTemperature(looks: DisplayLook[], query: TemperatureSearchQuery): DisplayLook[] {
+export function searchLooksByTemperature(
+  looks: DisplayLook[],
+  query: TemperatureSearchQuery,
+  options: { expandRange?: boolean; limit?: number } = {}
+): DisplayLook[] {
   const usable = looks.filter(hasUsableWeatherForTempSearch);
 
   const rainFiltered =
@@ -249,10 +255,10 @@ export function searchLooksByTemperature(looks: DisplayLook[], query: Temperatur
     Math.abs(look.weather.tempMin - query.targetMin) <= range;
 
   let candidates = rainFiltered.filter((l) => withinRange(l, TEMP_SEARCH_INITIAL_RANGE_C));
-  if (candidates.length < TEMP_SEARCH_MIN_RESULTS) {
+  if (options.expandRange !== false && candidates.length < TEMP_SEARCH_MIN_RESULTS) {
     candidates = rainFiltered.filter((l) => withinRange(l, TEMP_SEARCH_EXPANDED_RANGE_C));
   }
-  if (candidates.length === 0) {
+  if (options.expandRange !== false && candidates.length === 0) {
     candidates = rainFiltered;
   }
 
@@ -261,5 +267,5 @@ export function searchLooksByTemperature(looks: DisplayLook[], query: Temperatur
     score: computeTemperatureMatchScore(query.targetMax, query.targetMin, look.weather.tempMax, look.weather.tempMin),
   }));
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, TEMP_SEARCH_MAX_RESULTS).map((s) => s.look);
+  return scored.slice(0, options.limit ?? TEMP_SEARCH_MAX_RESULTS).map((s) => s.look);
 }
