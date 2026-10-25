@@ -4,9 +4,14 @@ import { createContext, useContext } from "react";
 import type { User } from "firebase/auth";
 import type { DisplayLook } from "@/lib/useLocalFirstLooks";
 import type { DbWeather, DbWeatherStatus, DressLevel } from "@/lib/lookStore";
+import type { DressCategory } from "@/lib/dressLevel";
 
 export type AppContextValue = {
   user: User;
+  dressCategories: DressCategory[];
+  categoriesReady: boolean;
+  categoriesError: string | null;
+  saveDressCategories: (categories: DressCategory[]) => Promise<void>;
   looks: DisplayLook[];
   /** 백그라운드 Firestore 동기화 진행 중 여부 (초기 화면을 막지 않음) */
   syncing: boolean;

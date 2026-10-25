@@ -12,7 +12,7 @@ import { regenerateLookWeather } from "@/lib/regenerateWeather";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import { saveManualCropCorrection } from "@/lib/personalCropHeuristic";
 import { updateLookDate, updateLookDressLevel, type DressLevel } from "@/lib/lookStore";
-import { DRESS_LEVELS, dressLevelLabel } from "@/lib/dressLevel";
+import { useDressLevels } from "@/lib/dressLevel";
 import ManualCutoutCropModal, { type ManualCropResult } from "@/components/ManualCutoutCropModal";
 import LookDetailGallery from "@/components/LookDetailGallery";
 
@@ -53,11 +53,13 @@ function resolveBackHref(searchParams: URLSearchParams): string {
 }
 
 function LookDetailPageInner() {
+  const { DRESS_LEVELS, dressLevelLabel } = useDressLevels();
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, looks, syncing, deleteLook, refreshSingleLook, patchLookWeather, patchLookDressLevel, patchLookDate } =
     useApp();
+  const { categoriesReady, categoriesError } = useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -241,7 +243,7 @@ function LookDetailPageInner() {
   // 않고 이 patch 이전 값(previous)으로 되돌려, Firestore와 local state가
   // 어긋난 채로 남지 않게 한다.
   async function handleSetDressLevel(level: DressLevel) {
-    if (!look || look.dressLevel === level) return;
+    if (!look || !categoriesReady || look.dressLevel === level) return;
     const previous = look.dressLevel;
     setDressLevelError(null);
     patchLookDressLevel(look.id, level);
@@ -405,7 +407,7 @@ function LookDetailPageInner() {
             현재 값에 해당하는 버튼만 선택 표시하고, 다른 버튼을 누르면 즉시
             수정한다(전용 분류 화면과 달리 다음 룩으로 넘어가지 않음). */}
         <div className="mt-4">
-          <p className="text-sm font-medium text-neutral-800">꾸밈레벨</p>
+          <div className="flex items-center justify-between"><p className="text-sm font-medium text-neutral-800">꾸밈레벨</p><Link href="/looks/categories" className="text-xs text-neutral-500 underline">카테고리 관리</Link></div>
           <div className="mt-2 grid grid-cols-3 gap-2">
             {DRESS_LEVELS.map((level) => {
               const selected = look.dressLevel === level;
@@ -414,8 +416,9 @@ function LookDetailPageInner() {
                   key={level}
                   type="button"
                   onClick={() => handleSetDressLevel(level)}
+                  disabled={!categoriesReady}
                   className={
-                    "rounded-xl border py-3 text-sm font-medium " +
+                    "rounded-xl border px-2 py-3 text-sm font-medium break-words disabled:opacity-50 " +
                     (selected
                       ? "border-neutral-900 bg-neutral-900 text-white"
                       : "border-neutral-300 bg-white text-neutral-700")
@@ -426,6 +429,8 @@ function LookDetailPageInner() {
               );
             })}
           </div>
+          {categoriesError && <p className="mt-2 text-xs text-red-600">{categoriesError}</p>}
+          {DRESS_LEVELS.length === 0 && <p className="mt-2 text-xs text-neutral-500">카테고리 관리에서 새 카테고리를 추가해 주세요.</p>}
           {dressLevelError && (
             <p className="mt-2 text-xs text-red-600">{dressLevelError}</p>
           )}

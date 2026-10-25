@@ -1,5 +1,7 @@
 "use client";
 
+import { useDressLevels } from "@/lib/dressLevel";
+
 import { useMemo, useState } from "react";
 import { useApp } from "@/lib/AppContext";
 import { useWeeklyForecast } from "@/lib/useWeeklyForecast";
@@ -8,8 +10,6 @@ import RecommendedLookCard from "@/components/RecommendedLookCard";
 import WeeklyForecastCarousel from "@/components/WeeklyForecastCarousel";
 import type { ForecastDay } from "@/lib/currentWeather";
 import {
-  DRESS_LEVEL_FILTERS,
-  dressLevelFilterLabel,
   filterLooksByDressLevel,
   type DressLevelFilter,
 } from "@/lib/dressLevel";
@@ -41,6 +41,7 @@ function recommendationTitle(day: ForecastDay, index: number): string {
 }
 
 export default function HomePage() {
+  const { DRESS_LEVEL_FILTERS, dressLevelFilterLabel } = useDressLevels();
   const { looks, syncing, signOutUser } = useApp();
   const {
     days: forecastDays,
@@ -143,7 +144,7 @@ export default function HomePage() {
           {/* 추천 룩 이미지가 먼저 눈에 들어와야 하므로 필터 존재감은
               최소화한다 - 기온으로 찾기 패널의 칩보다도 한 단계 더 가볍게
               (높이/패딩 축소, 미선택 테두리를 더 연하게). */}
-          <div className="mt-2.5 flex gap-1.5">
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
             {DRESS_LEVEL_FILTERS.map((f) => (
               <button
                 key={f}

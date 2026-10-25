@@ -1,4 +1,5 @@
 import type { DressLevel } from "@/lib/lookStore";
+import { useApp } from "@/lib/AppContext";
 
 export type { DressLevel };
 
@@ -14,7 +15,7 @@ const LABELS: Record<DressLevel, string> = {
 
 /** 내부 코드(casual/effortless/dressed)는 UI에 절대 노출하지 않고, 항상 이 한글 라벨만 보여준다. */
 export function dressLevelLabel(level: DressLevel): string {
-  return LABELS[level];
+  return LABELS[level] ?? "미분류";
 }
 
 // --- 기온 검색 / 홈 추천에서 쓰는 꾸밈레벨 "필터" ---------------------------
@@ -32,7 +33,20 @@ export function dressLevelFilterLabel(filter: DressLevelFilter): string {
 
 /** URL 쿼리 등 외부 문자열 값을 안전한 DressLevelFilter로 정규화한다 (모르는 값은 "all"). */
 export function parseDressLevelFilter(value: string | null | undefined): DressLevelFilter {
-  return (DRESS_LEVEL_FILTERS as string[]).includes(value ?? "") ? (value as DressLevelFilter) : "all";
+  return value && /^(casual|effortless|dressed|custom-[a-zA-Z0-9-]+)$/.test(value) ? value : "all";
+}
+
+export type { DressCategory } from "@/lib/dressCategoryConfig";
+
+export function useDressLevels() {
+  const { dressCategories } = useApp();
+  const label = (id: string) => dressCategories.find((category) => category.id === id)?.name ?? "미분류";
+  return {
+    DRESS_LEVELS: dressCategories.map((category) => category.id),
+    DRESS_LEVEL_FILTERS: ["all", ...dressCategories.map((category) => category.id)],
+    dressLevelLabel: label,
+    dressLevelFilterLabel: (id: string) => id === "all" ? "전체" : label(id),
+  };
 }
 
 /**

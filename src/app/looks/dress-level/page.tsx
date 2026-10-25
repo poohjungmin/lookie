@@ -6,7 +6,7 @@ import { useApp } from "@/lib/AppContext";
 import type { DisplayLook } from "@/lib/useLocalFirstLooks";
 import { resolveLookDate } from "@/lib/lookDate";
 import { updateLookDressLevel, type DressLevel } from "@/lib/lookStore";
-import { DRESS_LEVELS, dressLevelLabel } from "@/lib/dressLevel";
+import { useDressLevels } from "@/lib/dressLevel";
 
 /**
  * 화면에 크게 보여줄 이미지 - 목록에서 쓰는 thumbSrc(IndexedDB에 캐시된
@@ -50,7 +50,8 @@ function useBigCutoutSrc(look: DisplayLook | null): string | null {
 }
 
 export default function DressLevelPage() {
-  const { user, looks, syncing, patchLookDressLevel } = useApp();
+  const { DRESS_LEVELS, dressLevelLabel } = useDressLevels();
+  const { user, looks, syncing, patchLookDressLevel, categoriesReady, categoriesError } = useApp();
 
   const total = looks.length;
 
@@ -92,7 +93,7 @@ export default function DressLevelPage() {
   // 버튼 탭 -> local/global state 즉시 반영 -> (큐가 다시 계산되며) 다음 룩
   // 즉시 표시 -> Firestore patch는 비동기로. 별도의 저장/확인/다음 버튼은 없다.
   function handlePick(level: DressLevel) {
-    if (!current) return;
+    if (!current || !categoriesReady) return;
     const lookId = current.id;
     setError(null);
     patchLookDressLevel(lookId, level);
@@ -164,6 +165,9 @@ export default function DressLevelPage() {
       <p className="mt-1 text-xs text-neutral-400">
         {classifiedCount} / {total} 완료
       </p>
+      <Link href="/looks/categories" className="mt-3 inline-block text-xs text-neutral-500 underline">카테고리 관리</Link>
+      {categoriesError && <p className="mt-3 text-xs text-red-600">{categoriesError}</p>}
+      {DRESS_LEVELS.length === 0 && <p className="mt-3 text-sm text-neutral-500">카테고리를 추가한 뒤 분류할 수 있어요.</p>}
 
       <p className="mt-8 text-sm text-neutral-500">이날은 얼마나 꾸몄지?</p>
 
@@ -198,7 +202,8 @@ export default function DressLevelPage() {
             key={level}
             type="button"
             onClick={() => handlePick(level)}
-            className="rounded-2xl bg-neutral-100 py-[18px] text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-900 active:text-white"
+            disabled={!categoriesReady}
+            className="break-words rounded-2xl bg-neutral-100 px-2 py-[18px] text-sm font-medium text-neutral-900 transition-colors active:bg-neutral-900 active:text-white disabled:opacity-50"
           >
             {dressLevelLabel(level)}
           </button>

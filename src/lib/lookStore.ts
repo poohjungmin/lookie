@@ -60,7 +60,7 @@ export function toDbWeather(result: WeatherResult, locationSource: WeatherLocati
  * 점수는 의도적으로 두지 않는다. UI에는 이 내부 코드가 아니라
  * dressLevel.ts의 한글 라벨(안꾸/꾸안꾸/꾸꾸꾸)만 노출한다.
  */
-export type DressLevel = "casual" | "effortless" | "dressed";
+export type DressLevel = string;
 
 export type LookRecord = {
   imageUrl: string;

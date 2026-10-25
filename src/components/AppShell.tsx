@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -13,6 +13,7 @@ import { useLocalFirstLooks } from "@/lib/useLocalFirstLooks";
 import { AppContext } from "@/lib/AppContext";
 import BottomNav from "@/components/BottomNav";
 import LoginScreen from "@/components/LoginScreen";
+import { useDressCategories } from "@/lib/useDressCategories";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -48,6 +49,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     patchLookDate,
     deleteLook,
   } = useLocalFirstLooks(user ? user.uid : null, log);
+  const categorySettings = useDressCategories(user?.uid ?? null);
+  const visibleLooks = useMemo(() => {
+    const ids = new Set(categorySettings.dressCategories.map((category) => category.id));
+    return looks.map((look) => look.dressLevel && !ids.has(look.dressLevel) ? { ...look, dressLevel: null } : look);
+  }, [looks, categorySettings.dressCategories]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -117,7 +123,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <AppContext.Provider
       value={{
         user,
-        looks,
+        ...categorySettings,
+        looks: visibleLooks,
         syncing,
         offline,
         refreshLooks: refresh,

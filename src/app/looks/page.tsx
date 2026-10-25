@@ -1,5 +1,7 @@
 "use client";
 
+import { useDressLevels } from "@/lib/dressLevel";
+
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -19,8 +21,6 @@ import {
   type TemperatureRainFilter,
 } from "@/lib/weatherSimilarity";
 import {
-  DRESS_LEVEL_FILTERS,
-  dressLevelFilterLabel,
   filterLooksByDressLevel,
   parseDressLevelFilter,
   type DressLevelFilter,
@@ -33,7 +33,7 @@ const RAIN_OPTIONS: { value: TemperatureRainFilter; label: string }[] = [
 ];
 
 /** 검색 결과 상단 제목 - 실제로 적용된 조건만 자연스럽게 이어붙인다. */
-function searchResultTitle(query: {
+function searchResultTitle(dressLevelFilterLabel: (id: string) => string, query: {
   targetMax: number | null;
   targetMin: number | null;
   rain: TemperatureRainFilter;
@@ -52,7 +52,8 @@ function searchResultTitle(query: {
 }
 
 function LooksPageInner() {
-  const { user, looks, syncing, patchLookWeather } = useApp();
+  const { DRESS_LEVEL_FILTERS, dressLevelFilterLabel } = useDressLevels();
+  const { user, looks, syncing, patchLookWeather, dressCategories } = useApp();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -138,9 +139,9 @@ function LooksPageInner() {
       targetMax: hasTemp ? max : null,
       targetMin: hasTemp ? min : null,
       rain: rainParam,
-      dressLevel: dressParam,
+      dressLevel: dressCategories.some((category) => category.id === dressParam) ? dressParam : "all",
     };
-  }, [isWeatherSearchMode, searchParams]);
+  }, [isWeatherSearchMode, searchParams, dressCategories]);
 
   // looks는 이미 local-first로 로드된 배열 그대로 - 검색 때문에 Firestore를
   // 다시 조회하지 않는다. 비/꾸밈레벨은 기온 similarity 계산 "전"에 후보를
@@ -253,6 +254,7 @@ function LooksPageInner() {
                   >
                     꾸밈레벨 정하기
                   </Link>
+                  <Link href="/looks/categories" onClick={() => setMenuOpen(false)} className="block px-3 py-2.5 text-sm text-neutral-700">카테고리 관리</Link>
                 </div>
               )}
             </div>
@@ -319,7 +321,7 @@ function LooksPageInner() {
 
           <div className="mt-3">
             <span className="text-xs text-neutral-500">비</span>
-            <div className="mt-1.5 flex gap-2">
+            <div className="mt-1.5 flex flex-wrap gap-2">
               {RAIN_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -377,7 +379,7 @@ function LooksPageInner() {
         <section>
           <div className="flex items-center justify-between px-2">
             <h2 className="text-sm font-medium text-neutral-800">
-              {searchResultTitle(activeQuery)}
+              {searchResultTitle(dressLevelFilterLabel, activeQuery)}
             </h2>
             <button
               type="button"
