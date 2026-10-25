@@ -19,6 +19,7 @@ export type AppContextValue = {
   patchLookWeather: (lookId: string, weather: DbWeather | null, weatherStatus: DbWeatherStatus) => void;
   /** 꾸밈레벨만 바뀐 룩 하나를 이미지 재다운로드 없이 가볍게 갱신한다 (분류 화면/상세 화면에서 선택 즉시). */
   patchLookDressLevel: (lookId: string, dressLevel: DressLevel | null) => void;
+  patchLookDate: (lookId: string, date: Date) => void;
   /** Firestore 문서 + Storage 파일 + 로컬 캐시 + 화면 상태까지 완전히 지운다. */
   deleteLook: (lookId: string) => Promise<void>;
   signOutUser: () => void;

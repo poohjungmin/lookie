@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import { Timestamp } from "firebase/firestore";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useApp } from "@/lib/AppContext";
@@ -10,7 +11,7 @@ import { regenerateLookCutoutFromCrop } from "@/lib/regenerateCutout";
 import { regenerateLookWeather } from "@/lib/regenerateWeather";
 import { downloadOriginalWithFallbacks } from "@/lib/cutoutDownload";
 import { saveManualCropCorrection } from "@/lib/personalCropHeuristic";
-import { updateLookDressLevel, type DressLevel } from "@/lib/lookStore";
+import { updateLookDate, updateLookDressLevel, type DressLevel } from "@/lib/lookStore";
 import { DRESS_LEVELS, dressLevelLabel } from "@/lib/dressLevel";
 import ManualCutoutCropModal, { type ManualCropResult } from "@/components/ManualCutoutCropModal";
 import LookDetailGallery from "@/components/LookDetailGallery";
@@ -55,11 +56,15 @@ function LookDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, looks, syncing, deleteLook, refreshSingleLook, patchLookWeather, patchLookDressLevel } =
+  const { user, looks, syncing, deleteLook, refreshSingleLook, patchLookWeather, patchLookDressLevel, patchLookDate } =
     useApp();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [dateEditing, setDateEditing] = useState(false);
+  const [dateValue, setDateValue] = useState("");
+  const [dateSaving, setDateSaving] = useState(false);
+  const [dateMessage, setDateMessage] = useState<string | null>(null);
 
   // 꾸밈레벨: 상세 화면에서는 값을 바꿔도 다음 룩으로 넘어가지 않는다
   // (전용 분류 화면 /looks/dress-level과의 유일한 차이).
@@ -104,6 +109,34 @@ function LookDetailPageInner() {
   // 경우)도 여기서 함께 구제된다 - weatherStatus 값 자체가 아니라 실제
   // 촬영일 존재 여부로 재조회 가능 여부를 판단하기 때문.
   const takenAtDate = resolveLookDate(look);
+
+  async function handleSaveDate() {
+    if (!look || dateSaving || weatherRetrying) return;
+    const date = new Date(`${dateValue}T12:00:00`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateValue) || !Number.isFinite(date.getTime()) ||
+        `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}` !== dateValue) {
+      setDateMessage("올바른 날짜를 선택해 주세요.");
+      return;
+    }
+    setDateSaving(true);
+    setDateMessage(null);
+    try {
+      await updateLookDate(user.uid, look.id, date);
+      patchLookDate(look.id, date);
+      setDateEditing(false);
+      try {
+        const weather = await regenerateLookWeather(user.uid, { ...look, takenAt: Timestamp.fromDate(date) });
+        patchLookWeather(look.id, weather, "success");
+        setDateMessage("날짜와 날씨를 변경했어요.");
+      } catch {
+        setDateMessage("날짜는 저장했어요. 날씨는 ‘다시 조회’를 눌러 주세요.");
+      }
+    } catch {
+      setDateMessage("날짜를 저장하지 못했어요. 다시 시도해 주세요.");
+    } finally {
+      setDateSaving(false);
+    }
+  }
 
   // 자동 정규화가 사람을 잘못 판단한 예외 사진을 사용자가 직접 보정하는
   // 유일한 경로. 원본을 먼저 불러온 뒤 크롭 모달을 띄우고, 사용자가 고른
@@ -272,6 +305,26 @@ function LookDetailPageInner() {
         <p className="text-lg font-semibold text-neutral-900">
           {takenAtDate ? formatDateOnly(takenAtDate) : "촬영일 정보 없음"}
         </p>
+        {dateEditing ? (
+          <form className="mt-3 flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); void handleSaveDate(); }}>
+            <label htmlFor="look-date" className="text-sm text-neutral-600">촬영일</label>
+            <input id="look-date" type="date" required value={dateValue} disabled={dateSaving}
+              onChange={(event) => setDateValue(event.target.value)}
+              className="min-w-0 rounded-lg border border-neutral-300 px-3 py-2 text-sm" />
+            <button type="submit" disabled={dateSaving || weatherRetrying}
+              className="rounded-lg bg-neutral-900 px-3 py-2 text-sm text-white disabled:opacity-50">{dateSaving ? "저장 중…" : "저장"}</button>
+            <button type="button" disabled={dateSaving} onClick={() => setDateEditing(false)}
+              className="px-2 py-2 text-sm text-neutral-500">취소</button>
+          </form>
+        ) : (
+          <button type="button" disabled={dateSaving || weatherRetrying} onClick={() => {
+            const date = takenAtDate ?? new Date();
+            setDateValue(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`);
+            setDateMessage(null);
+            setDateEditing(true);
+          }} className="mt-2 text-sm text-neutral-500 underline underline-offset-4 disabled:opacity-50">날짜 변경</button>
+        )}
+        {dateMessage && <p role="status" className="mt-2 text-xs text-neutral-600">{dateMessage}</p>}
 
         <div className="mt-4 rounded-2xl bg-neutral-50 p-5">
           {look.weatherStatus === "success" && look.weather ? (
@@ -317,7 +370,7 @@ function LookDetailPageInner() {
                   <button
                     type="button"
                     onClick={handleRetryWeather}
-                    disabled={weatherRetrying}
+                    disabled={weatherRetrying || dateSaving}
                     className="mt-2 rounded-lg border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-700 disabled:opacity-50"
                   >
                     {weatherRetrying ? "날씨 조회 중…" : "다시 조회"}

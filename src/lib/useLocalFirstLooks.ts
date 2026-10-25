@@ -423,6 +423,21 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
   // 화면이 Firestore 응답을 기다리지 않고 선택 즉시 다음 룩으로 넘어갈 수
   // 있는 것은 이 함수가 동기적으로 화면(looks state)부터 갱신하기 때문이다
   // - 실제 Firestore patch(updateLookDressLevel)는 호출부가 비동기로 별도 실행한다.
+  const patchLookDate = useCallback(
+    (lookId: string, date: Date) => {
+      const existing = cacheMap.current.get(lookId);
+      if (!existing) return;
+      const updated: CachedLook = {
+        ...existing, takenAtMs: date.getTime(), weather: null,
+        weatherStatus: "failed", updatedAtMs: Date.now(),
+      };
+      cacheMap.current.set(lookId, updated);
+      void putCachedLook(updated);
+      publishFromCacheMap();
+    },
+    [publishFromCacheMap]
+  );
+
   const patchLookDressLevel = useCallback(
     (lookId: string, dressLevel: DressLevel | null) => {
       const existing = cacheMap.current.get(lookId);
@@ -444,6 +459,7 @@ export function useLocalFirstLooks(uid: string | null, log: (message: string) =>
     refreshSingleLook,
     patchLookWeather,
     patchLookDressLevel,
+    patchLookDate,
     deleteLook,
   };
 }

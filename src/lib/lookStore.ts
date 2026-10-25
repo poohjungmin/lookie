@@ -266,6 +266,17 @@ export async function updateLookWeatherFields(
   });
 }
 
+/** 날짜와 이전 날짜의 날씨를 함께 갱신해 서로 어긋나지 않게 한다. */
+export async function updateLookDate(uid: string, lookId: string, date: Date): Promise<void> {
+  if (!Number.isFinite(date.getTime())) throw new Error("올바른 날짜를 선택해 주세요.");
+  await updateDoc(lookDocRef(uid, lookId), {
+    takenAt: Timestamp.fromDate(date),
+    weather: null,
+    weatherStatus: "failed",
+    updatedAt: serverTimestamp(),
+  });
+}
+
 /**
  * 이 룩의 꾸밈레벨만 다시 쓴다 (사용자가 직접 매기는 3단계 분류).
  * original/thumbnail/cutout/weather/takenAt/GPS/lookId/createdAt 등 다른

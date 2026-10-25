@@ -45,6 +45,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
     refreshSingleLook,
     patchLookWeather,
     patchLookDressLevel,
+    patchLookDate,
     deleteLook,
   } = useLocalFirstLooks(user ? user.uid : null, log);
 
@@ -123,6 +124,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         refreshSingleLook,
         patchLookWeather,
         patchLookDressLevel,
+        patchLookDate,
         deleteLook,
         signOutUser,
       }}
